@@ -32,6 +32,7 @@ namespace Plugin_test_1
         protected override void RegisterOutputParams(GH_Component.GH_OutputParamManager pManager)
         {
             pManager.AddTextParameter("Output", "O", "Output data", GH_ParamAccess.list);
+            pManager.AddCurveParameter("Curve", "C", "Output curve", GH_ParamAccess.item);
         }
 
         /// <summary>
@@ -50,6 +51,7 @@ namespace Plugin_test_1
             output.Add("line was: " + e1.axis);
 
             DA.SetDataList(0, output);
+            DA.SetData(1, e1.axis);
         }
 
         /// <summary>
