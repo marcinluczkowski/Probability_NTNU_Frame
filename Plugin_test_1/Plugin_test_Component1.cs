@@ -62,10 +62,11 @@ namespace Plugin_test_1
 
             Element e1 = new Element((int)input, "element1");
             //create line
-            e1.axis = e1.createAxisSpecificLength(input);
+            e1.axis = e1.createAxisSpecificLenght(input);
 
-            ProbabilityMath pm = new ProbabilityMath();
-            double sf1 = pm.safetyfactor2;
+            PropabilityMath pm = new PropabilityMath();
+            double sf1 = pm.safetyfactor1;
+            //comment
 
             DA.SetDataList(0, output);
             DA.SetData(1, e1);

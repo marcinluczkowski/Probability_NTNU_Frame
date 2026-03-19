@@ -32,7 +32,7 @@ namespace Plugin_test_1
         protected override void RegisterOutputParams(GH_Component.GH_OutputParamManager pManager)
         {
             pManager.AddTextParameter("Output", "O", "Output data", GH_ParamAccess.list);
-            pManager.AddCurveParameter("Curve", "C", "Output curve", GH_ParamAccess.item);
+            pManager.AddCurveParameter("Line", "L", "Line data", GH_ParamAccess.item);
         }
 
         /// <summary>
