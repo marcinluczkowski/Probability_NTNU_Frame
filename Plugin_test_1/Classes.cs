@@ -9,10 +9,37 @@ namespace Plugin_test_1
 {
     public class Element
     {
-        public int id;
+        public int id = 0;
         public string name;
         public Line axis;
+
+        public Element()
+        { }
+        public Element(int _id, string _name)
+        {
+            id = _id;
+            name = _name;
+        }
+
+        public Line createAxis() 
+        {
+            Line axis1 = new Line(new Point3d(0, 0, 0), new Point3d(1, 0, 0));
+            return axis1; 
+        }
+        public Line createAxisSpecificLenght(double _length)
+        {
+            Line axis1 = new Line(new Point3d(0, 0, 0), new Point3d(_length, 0, 0));
+            return axis1;
+        }
     }
+
+    public class PropabilityMath
+    {
+        public double safetyfactor1 = 1.2;
+        public double safetyfactor2 = 2.0;
+
+    }
+
 
 
 

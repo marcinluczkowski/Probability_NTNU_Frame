@@ -60,10 +60,12 @@ namespace Plugin_test_1
             output.Add("Input is: " + n1);
 
 
-            Element e1 = new Element();
-            e1.id = (int)input;
-            e1.name = "Element 1";
-            e1.axis = new Line(new Point3d(0, 0, 0), new Point3d(1, 0, 0));
+            Element e1 = new Element((int)input, "element1");
+            //create line
+            e1.axis = e1.createAxisSpecificLenght(input);
+
+            PropabilityMath pm = new PropabilityMath();
+            double sf1 = pm.safetyfactor1;
             //comment
 
             DA.SetDataList(0, output);
