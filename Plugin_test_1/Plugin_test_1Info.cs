@@ -1,4 +1,4 @@
-﻿using Grasshopper;
+using Grasshopper;
 using Grasshopper.Kernel;
 using System;
 using System.Drawing;
@@ -7,13 +7,13 @@ namespace Plugin_test_1
 {
     public class Plugin_test_1Info : GH_AssemblyInfo
     {
-        public override string Name => "Plugin_test_1";
+        public override string Name => "Propability NTNU (FEM)";
 
         //Return a 24x24 pixel bitmap to represent this GHA library.
         public override Bitmap Icon => null;
 
         //Return a short string describing the purpose of this GHA library.
-        public override string Description => "";
+        public override string Description => "Line/beam FEM: ShapeGrammar-style assembly + toolbox linear static analysis (CSparse).";
 
         public override Guid Id => new Guid("74746568-0080-42d0-95cb-67019d5800e6");
 
