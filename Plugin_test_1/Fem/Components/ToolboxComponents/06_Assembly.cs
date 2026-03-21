@@ -30,7 +30,7 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             pManager.AddParameter(new Param_Element1D(), "Elements", "Elems", "Beam elements (from Line to Beam)", GH_ParamAccess.list);
             pManager.AddParameter(new Param_Support(), "Supports", "Sups", "Support conditions at nodes", GH_ParamAccess.list);
             pManager.AddParameter(new Param_Load(), "Loads", "Loads", "Point loads [kN]", GH_ParamAccess.list);
-
+            //
             pManager[0].Optional = true;
             pManager[1].Optional = true;
             pManager[2].Optional = true;
