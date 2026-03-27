@@ -141,6 +141,7 @@ namespace Propability_NTNU_v1.Components
             pManager.AddNumberParameter("Mx", "Mx", "Torsion Mx [kNm] {elem}(t)", GH_ParamAccess.tree);
             pManager.AddNumberParameter("My", "My", "Moment My [kNm] {elem}(t)", GH_ParamAccess.tree);
             pManager.AddNumberParameter("Mz", "Mz", "Moment Mz [kNm] {elem}(t)", GH_ParamAccess.tree);
+            pManager.AddNumberParameter("Utilization", "U", "Max structure utilization (N/NRd + My/MyRd + Mz/MzRd) using section material Fy", GH_ParamAccess.item);
         }
 
         protected override void SolveInstance(IGH_DataAccess DA)
@@ -196,6 +197,7 @@ namespace Propability_NTNU_v1.Components
             var mzTree = new GH_Structure<GH_Number>();
 
             var elemList = mdl.Elem1Ds.Where(x => x != null).ToList();
+            double maxUtilization = 0.0;
 
             // First pass: collect all values per quantity for global min/max
             var allN = new List<double>();
@@ -216,6 +218,28 @@ namespace Propability_NTNU_v1.Components
                 double[] F;
                 try { F = elem.Calc_Forces(lcId); }
                 catch { continue; }
+
+                double fy = elem.Sec?.Mat?.Fy ?? 0.0;
+                double area = elem.Sec?.Area ?? 0.0;
+                double wy = elem.Sec?.Wy ?? 0.0;
+                double wz = elem.Sec?.Wz ?? 0.0;
+
+                if (fy > 0.0 && area > 0.0 && wy > 0.0 && wz > 0.0)
+                {
+                    double nEd = Math.Max(Math.Abs(F[0]), Math.Abs(F[6]));
+                    double myEd = Math.Max(Math.Abs(F[4]), Math.Abs(F[10]));
+                    double mzEd = Math.Max(Math.Abs(F[5]), Math.Abs(F[11]));
+
+                    double nRd = fy * area;
+                    double myRd = fy * wy / 1000.0;
+                    double mzRd = fy * wz / 1000.0;
+
+                    if (nRd > 0.0 && myRd > 0.0 && mzRd > 0.0)
+                    {
+                        double u = nEd / nRd + myEd / myRd + mzEd / mzRd;
+                        if (u > maxUtilization) maxUtilization = u;
+                    }
+                }
 
                 var path = new GH_Path(eIdx);
                 var ln = elem.OriginalLine.Length > 1e-12 ? elem.OriginalLine : elem.Line;
@@ -324,6 +348,7 @@ namespace Propability_NTNU_v1.Components
             DA.SetDataTree(4, mxTree);
             DA.SetDataTree(5, myTree);
             DA.SetDataTree(6, mzTree);
+            DA.SetData(7, maxUtilization);
         }
 
         /// <summary>Maps a value to chart offset factor. Mode 0: raw v. Mode 1: neg in [-1,0], pos in [0,1]. Mode 2: [-1,1] symmetric, zero fixed.</summary>

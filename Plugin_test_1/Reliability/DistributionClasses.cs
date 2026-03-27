@@ -5,7 +5,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace Plugin_test_1
+namespace Plugin_test_1.Reliability
 {
     public class RandomVariable
     {
@@ -135,17 +135,17 @@ namespace Plugin_test_1
             }
             else if (DistType == "gumbel")
             {
-                MeanGumbelT = CharValue / 1.35;
-                StdDev = MeanGumbelT * COV;
+                Mean = CharValue / 1.35;
+                StdDev = Mean * COV;
 
-                Mean = MeanGumbelT + Math.Sqrt(6) / Math.PI * StdDev * Math.Log(1.0 / ReferenceperiodYears);
+                double beta = StdDev * Math.Sqrt(6) / Math.PI;
+                double uT = Mean - 0.5772156649 * beta; // Euler gamma
 
-                double alpha = Math.PI / (StdDev * Math.Sqrt(6));
-                double u = Mean - Euler_Gamma / alpha;
-                double beta = 1.0 / alpha;
-                double uT = u + beta * Math.Log(ReferenceperiodYears);
+                // 3. Convert to 1-year (if needed)
+                double u1 = uT - beta * Math.Log(ReferenceperiodYears);
+                double Mean1 = u1 + 0.5772156649 * beta;
 
-                LocationGumbel = u;
+                LocationGumbel = u1;
                 LocationGumbelT = uT;
                 ScaleGumbel = beta;
             }
@@ -172,7 +172,7 @@ namespace Plugin_test_1
             if (p <= 0 || p >= 1)
                 throw new ArgumentOutOfRangeException(nameof(p), "p must be in (0, 1)");
 
-            return LocationGumbelT - ScaleGumbel * Math.Log(-Math.Log(p));
+            return LocationGumbelT - ScaleGumbel * Math.Log(-Math.Log(p)); //unsure if this is 100% correct for inverse CDF
         }
 
         public double PDF(double x)
