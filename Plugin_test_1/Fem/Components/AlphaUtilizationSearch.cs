@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Grasshopper.Kernel;
 using Plugin_test_1.Reliability;
 using Propability_NTNU_v1;
@@ -40,6 +41,9 @@ namespace Plugin_test_1.Fem.Components
             pManager.AddNumberParameter("Utilization", "U", "Resulting max utilization", GH_ParamAccess.item);
             pManager.AddNumberParameter("Design Value Resistance", "DVResistance", "Design value for resistance", GH_ParamAccess.item);
             pManager.AddNumberParameter("Design Value Load", "DVLoad", "Design value for load", GH_ParamAccess.item);
+            pManager.AddBooleanParameter("Error list", "", "", GH_ParamAccess.list);
+            pManager.AddNumberParameter("Alpha Resistances List", "", "", GH_ParamAccess.list);
+            pManager.AddNumberParameter("Alpha Loads List", "", "", GH_ParamAccess.list);
         }
 
         protected override void SolveInstance(IGH_DataAccess DA)
@@ -154,6 +158,10 @@ namespace Plugin_test_1.Fem.Components
                 double bestYdS = 0.0;
                 double bestErr = double.MaxValue;
 
+                List<bool> errors = new List<bool>();
+                List<double> good_alpha_Rs = new List<double>();
+                List<double> good_alpha_Ss = new List<double>();
+
                 for (double alphaR = aRMin; alphaR <= aRMax + 1e-12; alphaR += aRStep)
                 {
                     for (double alphaS = aSMin; alphaS <= aSMax + 1e-12; alphaS += aSStep)
@@ -184,10 +192,14 @@ namespace Plugin_test_1.Fem.Components
                             bestErr = err;
                             bestAlphaR = alphaR;
                             bestAlphaS = alphaS;
-                            bestUtil = util;
+                            bestUtil = util;                            
                             bestYdR = resistanceResult.designvalue_yd;
                             bestYdS = loadResult.designvalue_yd;
                             found = true;
+                            errors.Add(found);
+                            
+                            good_alpha_Rs.Add(bestAlphaR);
+                            good_alpha_Ss.Add(bestAlphaS);
                         }
                     }
                 }
@@ -203,6 +215,9 @@ namespace Plugin_test_1.Fem.Components
                 DA.SetData(2, bestUtil);
                 DA.SetData(3, bestYdR);
                 DA.SetData(4, bestYdS);
+                DA.SetDataList(5, errors);
+                DA.SetDataList(6, good_alpha_Rs);
+                DA.SetDataList(7, good_alpha_Ss);
             }
             catch (Exception ex)
             {
