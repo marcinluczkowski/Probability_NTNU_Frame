@@ -3,6 +3,7 @@ using Grasshopper.Kernel;
 using Plugin_test_1.Reliability;
 using Propability_NTNU_v1;
 using Propability_NTNU_v1.Classes.Toolbox;
+using Rhino.Geometry;
 
 namespace Plugin_test_1.Fem.Components
 {
@@ -98,29 +99,52 @@ namespace Plugin_test_1.Fem.Components
 
             try
             {
-                if (mdl.Disps == null || mdl.Disps.Count == 0)
-                {
-                    _ = new SolveLS(ref mdl);
-                }
+                bool knownMaterial = StochasticInputCatalog.HasMaterial(material);
+                bool knownLoadType = StochasticInputCatalog.HasLoadType(loadType);
 
-                const double placeholderCov = 0.1; // Placeholder until table values are connected.
-                const double placeholderPercentile = 0.05; // Placeholder until table values are connected.
+                var materialInput = StochasticInputCatalog.GetMaterialInput(material);
+                var loadInput = StochasticInputCatalog.GetLoadInput(loadType);
+
+                if (!knownMaterial)
+                    AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "Unknown material in stochastic catalog. Using default material COV/percentile.");
+
+                if (!knownLoadType)
+                    AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "Unknown load type in stochastic catalog. Using default load COV/percentile.");
 
                 var resistanceRv = new RandomVariable(
                     string.IsNullOrWhiteSpace(material) ? "material" : material,
                     rk,
-                    placeholderPercentile,
-                    placeholderCov,
-                    "lognormal");
+                    materialInput.Percentile,
+                    materialInput.COV,
+                    materialInput.DistributionType);
 
                 var loadRv = new RandomVariable(
                     string.IsNullOrWhiteSpace(loadType) ? "load" : loadType,
                     sk,
-                    placeholderPercentile,
-                    placeholderCov,
-                    GetLoadDistributionType(loadType));
+                    loadInput.Percentile,
+                    loadInput.COV,
+                    loadInput.DistributionType);
 
                 var calculator = new DesignValueCalculator();
+
+                double modelLoadReference = GetModelLoadReference(mdl);
+                if (modelLoadReference <= 0)
+                {
+                    AddRuntimeMessage(GH_RuntimeMessageLevel.Error, "Model has zero load magnitude. Cannot normalize to characteristic load.");
+                    return;
+                }
+
+                // Normalize incoming model to characteristic load level so search is decoupled
+                // from any upstream pre-scaling (e.g., DesignValues component outputs).
+                double characteristicScale = sk / modelLoadReference;
+                TB_Model characteristicModel = CreateScaledModel(mdl, characteristicScale);
+                _ = new SolveLS(ref characteristicModel);
+                double maxDemandCoefficient = ComputeMaxDemandCoefficient(characteristicModel);
+                if (maxDemandCoefficient <= 0)
+                {
+                    AddRuntimeMessage(GH_RuntimeMessageLevel.Error, "Characteristic model produced zero demand coefficient.");
+                    return;
+                }
 
                 bool found = false;
                 double bestAlphaR = 0.0;
@@ -134,9 +158,6 @@ namespace Plugin_test_1.Fem.Components
                 {
                     for (double alphaS = aSMin; alphaS <= aSMax + 1e-12; alphaS += aSStep)
                     {
-                        if (alphaR < 0 || alphaR > 1 || alphaS < 0 || alphaS > 1)
-                            continue;
-
                         var resistanceResult = calculator.CalculateDesignValue(
                             alphaR,
                             resistanceRv.Mean,
@@ -151,8 +172,11 @@ namespace Plugin_test_1.Fem.Components
                             beta,
                             loadRv.DistType);
 
+                        // Demand factor from characteristic to design level.
                         double gammaS = loadResult.designvalue_yd / sk;
-                        double util = EvaluateMaxUtilization(mdl, gammaS, resistanceResult.designvalue_yd);
+
+                        // Reuse solved characteristic model and evaluate utilization algebraically.
+                        double util = (gammaS * maxDemandCoefficient) / resistanceResult.designvalue_yd;
                         double err = Math.Abs(util - targetUtil);
 
                         if (err < bestErr)
@@ -186,17 +210,54 @@ namespace Plugin_test_1.Fem.Components
             }
         }
 
-        private static string GetLoadDistributionType(string loadType)
+        private static TB_Model CreateScaledModel(TB_Model sourceModel, double gammaS)
         {
-            if (string.IsNullOrWhiteSpace(loadType))
-                return "normal";
+            var elems = sourceModel.Elem1Ds?.ConvertAll(e => e?.DeepCopy()) ?? new System.Collections.Generic.List<TB_Element_1D>();
+            var sups = sourceModel.Sups?.ConvertAll(s => s?.DeepCopy()) ?? new System.Collections.Generic.List<TB_Support>();
+            var loads = new System.Collections.Generic.List<TB_Load>();
 
-            return loadType.Trim().ToLowerInvariant() == "variable" ? "gumbel" : "normal";
+            if (sourceModel.Loads != null)
+            {
+                foreach (var l in sourceModel.Loads)
+                {
+                    if (l is TB_Load_Point pl && pl.Loads.Count >= 6)
+                    {
+                        var f = new Vector3d(pl.Loads[0] * gammaS, pl.Loads[1] * gammaS, pl.Loads[2] * gammaS);
+                        var m = new Vector3d(pl.Loads[3] * gammaS, pl.Loads[4] * gammaS, pl.Loads[5] * gammaS);
+                        loads.Add(new TB_Load_Point(pl.Pt, f, m, pl.Lc ?? 0));
+                    }
+                    else
+                    {
+                        loads.Add(l?.DeepCopy());
+                    }
+                }
+            }
+
+            return new TB_Model(elems, sups, loads);
         }
 
-        private static double EvaluateMaxUtilization(TB_Model model, double gammaS, double fyDesign)
+        private static double GetModelLoadReference(TB_Model model)
         {
-            double maxU = 0.0;
+            double maxAbs = 0.0;
+            if (model?.Loads == null) return maxAbs;
+
+            foreach (var l in model.Loads)
+            {
+                if (l is not TB_Load_Point pl || pl.Loads == null) continue;
+                int count = Math.Min(6, pl.Loads.Count);
+                for (int i = 0; i < count; i++)
+                {
+                    double v = Math.Abs(pl.Loads[i]);
+                    if (v > maxAbs) maxAbs = v;
+                }
+            }
+
+            return maxAbs;
+        }
+
+        private static double ComputeMaxDemandCoefficient(TB_Model model)
+        {
+            double maxCoeff = 0.0;
             int nLc = (model.Disps == null || model.Disps.Count == 0) ? 0 : model.Disps.Count;
 
             for (int lcId = 0; lcId < nLc; lcId++)
@@ -209,22 +270,22 @@ namespace Plugin_test_1.Fem.Components
 
                     var f = e.Calc_Forces(lcId);
 
-                    double nEd = gammaS * Math.Max(Math.Abs(f[0]), Math.Abs(f[6]));
-                    double myEd = gammaS * Math.Max(Math.Abs(f[4]), Math.Abs(f[10]));
-                    double mzEd = gammaS * Math.Max(Math.Abs(f[5]), Math.Abs(f[11]));
+                    double nEd = Math.Max(Math.Abs(f[0]), Math.Abs(f[6]));
+                    double myEd = Math.Max(Math.Abs(f[4]), Math.Abs(f[10]));
+                    double mzEd = Math.Max(Math.Abs(f[5]), Math.Abs(f[11]));
 
-                    double nRd = fyDesign * e.Sec.Area;
-                    double myRd = fyDesign * e.Sec.Wy / 1000.0;
-                    double mzRd = fyDesign * e.Sec.Wz / 1000.0;
+                    double a = e.Sec.Area;
+                    double wy = e.Sec.Wy / 1000.0;
+                    double wz = e.Sec.Wz / 1000.0;
 
-                    if (nRd <= 0 || myRd <= 0 || mzRd <= 0) continue;
+                    if (a <= 0 || wy <= 0 || wz <= 0) continue;
 
-                    double u = nEd / nRd + myEd / myRd + mzEd / mzRd;
-                    if (u > maxU) maxU = u;
+                    double coeff = nEd / a + myEd / wy + mzEd / wz;
+                    if (coeff > maxCoeff) maxCoeff = coeff;
                 }
             }
 
-            return maxU;
+            return maxCoeff;
         }
 
         protected override System.Drawing.Bitmap Icon => IconHelper.Create("α");

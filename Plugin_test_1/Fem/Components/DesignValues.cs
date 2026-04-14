@@ -1,8 +1,8 @@
-﻿using System;
-
-using Grasshopper.Kernel;
+﻿using Grasshopper.Kernel;
 using Plugin_test_1.Reliability;
+using Propability_NTNU_v1;
 using Propability_NTNU_v1.Classes.Toolbox;
+using System;
 
 namespace Plugin_test_1.Fem.Components
 {
@@ -133,15 +133,7 @@ namespace Plugin_test_1.Fem.Components
         /// <summary>
         /// Provides an Icon for the component.
         /// </summary>
-        protected override System.Drawing.Bitmap Icon
-        {
-            get
-            {
-                //You can add image files to your project resources and access them like this:
-                // return Resources.IconForThisComponent;
-                return null;
-            }
-        }
+        protected override System.Drawing.Bitmap Icon => IconHelper.Create("DV");
 
         /// <summary>
         /// Gets the unique ID for this component. Do not change this ID after release.

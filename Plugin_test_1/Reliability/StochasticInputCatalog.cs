@@ -28,7 +28,7 @@ namespace Plugin_test_1.Reliability
             new Dictionary<string, StochasticInputData>(StringComparer.OrdinalIgnoreCase)
             {
                 { "steel", new StochasticInputData("lognormal", null, 0.05, 0.01) },
-                { "concrete", new StochasticInputData("lognormal", null, 0.1, 0.05) },
+                { "concrete", new StochasticInputData("lognormal", null, 0.10, 0.05) },
                 { "timber", new StochasticInputData("lognormal", null, 0.15, 0.05) }
             };
 
