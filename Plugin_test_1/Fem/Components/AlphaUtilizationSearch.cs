@@ -44,6 +44,9 @@ namespace Plugin_test_1.Fem.Components
             pManager.AddBooleanParameter("Error list", "", "", GH_ParamAccess.list);
             pManager.AddNumberParameter("Alpha Resistances List", "", "", GH_ParamAccess.list);
             pManager.AddNumberParameter("Alpha Loads List", "", "", GH_ParamAccess.list);
+            pManager.AddBooleanParameter("All Error list", "", "", GH_ParamAccess.list);
+            pManager.AddNumberParameter("All Alpha Resistances List", "", "", GH_ParamAccess.list);
+            pManager.AddNumberParameter("All Alpha Loads List", "", "", GH_ParamAccess.list);
         }
 
         protected override void SolveInstance(IGH_DataAccess DA)
@@ -157,15 +160,33 @@ namespace Plugin_test_1.Fem.Components
                 double bestYdR = 0.0;
                 double bestYdS = 0.0;
                 double bestErr = double.MaxValue;
+                const double eurocodeAlphaR = -0.7;
+                const double maxUtilizationTolerance = 1.00005;
+                double bestAlphaRDistance = double.MaxValue;
 
                 List<bool> errors = new List<bool>();
                 List<double> good_alpha_Rs = new List<double>();
                 List<double> good_alpha_Ss = new List<double>();
 
+                List<bool> all_errors = new List<bool>();
+                List<double> all_good_alpha_Rs = new List<double>();
+                List<double> all_good_alpha_Ss = new List<double>();
+
                 for (double alphaR = aRMin; alphaR <= aRMax + 1e-12; alphaR += aRStep)
                 {
                     for (double alphaS = aSMin; alphaS <= aSMax + 1e-12; alphaS += aSStep)
                     {
+                        all_good_alpha_Rs.Add(alphaR);
+                        all_good_alpha_Ss.Add(alphaS);
+                        bool f = false;
+
+                        double alphaNorm = Math.Sqrt(alphaR * alphaR + alphaS * alphaS); // making sure the point is outside of beta-target 
+                        if (alphaNorm <= 1.0)
+                        {
+                            all_errors.Add(f);
+                            continue;
+                        }
+
                         var resistanceResult = calculator.CalculateDesignValue(
                             alphaR,
                             resistanceRv.Mean,
@@ -185,10 +206,22 @@ namespace Plugin_test_1.Fem.Components
 
                         // Reuse solved characteristic model and evaluate utilization algebraically.
                         double util = (gammaS * maxDemandCoefficient) / resistanceResult.designvalue_yd;
-                        double err = Math.Abs(util - targetUtil);
-
-                        if (err < bestErr)
+                        if (util > maxUtilizationTolerance)
                         {
+                            all_errors.Add(f);
+                            continue;
+                        }
+
+                        double err = Math.Abs(util - targetUtil);
+                        double alphaRDistance = Math.Abs(alphaR - eurocodeAlphaR);
+
+                        bool betterByAlphaR = alphaRDistance < bestAlphaRDistance;
+                        bool tieOnAlphaR = alphaRDistance == bestAlphaRDistance;
+                        bool tieOnAlphaRPreferLowerError = tieOnAlphaR && err < bestErr;
+
+                        if (betterByAlphaR || tieOnAlphaRPreferLowerError)
+                        {
+                            bestAlphaRDistance = alphaRDistance;
                             bestErr = err;
                             bestAlphaR = alphaR;
                             bestAlphaS = alphaS;
@@ -196,17 +229,19 @@ namespace Plugin_test_1.Fem.Components
                             bestYdR = resistanceResult.designvalue_yd;
                             bestYdS = loadResult.designvalue_yd;
                             found = true;
+                            f = true;
                             errors.Add(found);
-                            
                             good_alpha_Rs.Add(bestAlphaR);
                             good_alpha_Ss.Add(bestAlphaS);
                         }
+
+                        all_errors.Add(f);
                     }
                 }
 
                 if (!found)
                 {
-                    AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "No alpha pair found in search range.");
+                    AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "No alpha pair found in search range that satisfies both sqrt(alphaR^2 + alphaS^2) > 1 and utilization <= 1.0005.");
                     return;
                 }
 
@@ -218,6 +253,9 @@ namespace Plugin_test_1.Fem.Components
                 DA.SetDataList(5, errors);
                 DA.SetDataList(6, good_alpha_Rs);
                 DA.SetDataList(7, good_alpha_Ss);
+                DA.SetDataList(8, all_errors);
+                DA.SetDataList(9, all_good_alpha_Rs);
+                DA.SetDataList(10, all_good_alpha_Ss);
             }
             catch (Exception ex)
             {
