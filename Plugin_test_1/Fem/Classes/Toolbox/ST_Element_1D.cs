@@ -74,7 +74,30 @@ namespace Propability_NTNU_v1.Classes.Toolbox
 
         public TB_Element_1D DeepCopy()
         {
-            return (TB_Element_1D)base.MemberwiseClone();
+            var copy = new TB_Element_1D
+            {
+                Line = Line,
+                OriginalLine = OriginalLine,
+                Tag = Tag,
+                Sec = Sec?.DeepCopy(),
+                Nodes = new List<Node>(),
+                Id = Id,
+                EK = EK != null ? (DenseMatrix)EK.Clone() : null,
+                TM = TM != null ? (DenseMatrix)TM.Clone() : null,
+                EKG = EKG != null ? (DenseMatrix)EKG.Clone() : null,
+                Vz = Vz,
+                Beta = Beta,
+                Pln = Pln,
+                Weight = Weight,
+                Buckling_Length = Buckling_Length
+            };
+
+            foreach (bool hinge in Hinges)
+            {
+                copy.Hinges.Add(hinge);
+            }
+
+            return copy;
         }
 
         public override string ToString()

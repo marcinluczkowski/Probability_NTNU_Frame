@@ -241,5 +241,38 @@ namespace Plugin_test_1.Reliability
                     throw new InvalidOperationException($"Unknown dist_type: {DistType}");
             }
         }
+
+        /// <summary>
+        /// Factory method: builds a Eurocode-calibrated set of 5 random variables
+        /// matching PhD calibration (FORM_Analysis.py): [fy, G, Q, theta_R, theta_E].
+        /// 
+        /// Parameters:
+        ///   fyk  : Characteristic yield strength [MPa]
+        ///   Gk   : Characteristic permanent load [kN/m] or [kN]
+        ///   Qk   : Characteristic variable load [kN/m] or [kN]
+        /// 
+        /// Returns:
+        ///   Array of 5 RandomVariables: [fy, G, Q, theta_R, theta_E]
+        /// </summary>
+        public static RandomVariable[] BuildEurocodeRVs(double fyk, double Gk, double Qk)
+        {
+            return new[]
+            {
+                // Material: lognormal, 5% COV
+                new RandomVariable("fy", fyk, 0.50, 0.05, "lognormal"),
+
+                // Permanent load: normal, 10% COV
+                new RandomVariable("G", Gk, 0.50, 0.10, "normal"),
+
+                // Variable load: gumbel, 26% COV, 98th percentile
+                new RandomVariable("Q", Qk, 0.98, 0.26, "gumbel"),
+
+                // Resistance model uncertainty: lognormal, 5% COV (mean-based)
+                new RandomVariable("theta_R", 1.15, 0.05, 0.05, "lognormal", 1.15),
+
+                // Execution model uncertainty: lognormal, 10% COV (mean-based)
+                new RandomVariable("theta_E", 1.00, 0.50, 0.10, "lognormal", 1.00),
+            };
+        }
     }
 }

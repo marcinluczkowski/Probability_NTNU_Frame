@@ -47,6 +47,7 @@ namespace Plugin_test_1.Fem.Components
             pManager.AddBooleanParameter("All Error list", "", "", GH_ParamAccess.list);
             pManager.AddNumberParameter("All Alpha Resistances List", "", "", GH_ParamAccess.list);
             pManager.AddNumberParameter("All Alpha Loads List", "", "", GH_ParamAccess.list);
+            pManager.AddParameter(new Param_TB_Model(), "Optimized Model", "Model*", "Optimized model with the best alpha pair design load level", GH_ParamAccess.item);
         }
 
         protected override void SolveInstance(IGH_DataAccess DA)
@@ -58,7 +59,7 @@ namespace Plugin_test_1.Fem.Components
             double sk = 0.0;
             double beta = 3.8;
             double targetUtil = 1.0;
-            double aRMin = 0.0;
+            double aRMin = -1.0;
             double aRMax = 1.0;
             double aRStep = 0.02;
             double aSMin = 0.0;
@@ -97,8 +98,8 @@ namespace Plugin_test_1.Fem.Components
                 return;
             }
 
-            var mdl = ghModel.Value;
-            if (mdl.Elem1Ds == null || mdl.Elem1Ds.Count == 0)
+            var mdl = ghModel.Value?.DeepCopy();
+            if (mdl == null || mdl.Elem1Ds == null || mdl.Elem1Ds.Count == 0)
             {
                 AddRuntimeMessage(GH_RuntimeMessageLevel.Error, "Model has no elements.");
                 return;
@@ -160,9 +161,7 @@ namespace Plugin_test_1.Fem.Components
                 double bestYdR = 0.0;
                 double bestYdS = 0.0;
                 double bestErr = double.MaxValue;
-                const double eurocodeAlphaR = -0.7;
                 const double maxUtilizationTolerance = 1.00005;
-                double bestAlphaRDistance = double.MaxValue;
 
                 List<bool> errors = new List<bool>();
                 List<double> good_alpha_Rs = new List<double>();
@@ -213,15 +212,10 @@ namespace Plugin_test_1.Fem.Components
                         }
 
                         double err = Math.Abs(util - targetUtil);
-                        double alphaRDistance = Math.Abs(alphaR - eurocodeAlphaR);
+                        bool betterError = err < bestErr;
 
-                        bool betterByAlphaR = alphaRDistance < bestAlphaRDistance;
-                        bool tieOnAlphaR = alphaRDistance == bestAlphaRDistance;
-                        bool tieOnAlphaRPreferLowerError = tieOnAlphaR && err < bestErr;
-
-                        if (betterByAlphaR || tieOnAlphaRPreferLowerError)
+                        if (betterError)
                         {
-                            bestAlphaRDistance = alphaRDistance;
                             bestErr = err;
                             bestAlphaR = alphaR;
                             bestAlphaS = alphaS;
@@ -245,6 +239,10 @@ namespace Plugin_test_1.Fem.Components
                     return;
                 }
 
+                double bestGammaS = bestYdS / sk;
+                TB_Model optimizedModel = CreateScaledModel(mdl, bestGammaS);
+                _ = new SolveLS(ref optimizedModel);
+
                 DA.SetData(0, bestAlphaR);
                 DA.SetData(1, bestAlphaS);
                 DA.SetData(2, bestUtil);
@@ -256,6 +254,7 @@ namespace Plugin_test_1.Fem.Components
                 DA.SetDataList(8, all_errors);
                 DA.SetDataList(9, all_good_alpha_Rs);
                 DA.SetDataList(10, all_good_alpha_Ss);
+                DA.SetData(11, new GH_TB_Model(optimizedModel));
             }
             catch (Exception ex)
             {

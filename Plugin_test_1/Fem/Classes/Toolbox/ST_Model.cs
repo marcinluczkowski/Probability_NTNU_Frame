@@ -172,10 +172,54 @@ namespace Propability_NTNU_v1.Classes.Toolbox
 
         public TB_Model DeepCopy()
         {
-            var copy = (TB_Model)MemberwiseClone();
-            copy.Elem1Ds = Elem1Ds?.Select(e => e?.DeepCopy()).Where(e => e != null).ToList() ?? new List<TB_Element_1D>();
-            copy.Sups = Sups?.Select(s => s?.DeepCopy()).Where(s => s != null).ToList() ?? new List<TB_Support>();
-            copy.Loads = Loads?.Select(l => l?.DeepCopy()).Where(l => l != null).ToList() ?? new List<TB_Load>();
+            var elemCopies = Elem1Ds?.Select(e => e?.DeepCopy()).Where(e => e != null).ToList() ?? new List<TB_Element_1D>();
+            var supCopies = Sups?.Select(s => s?.DeepCopy()).Where(s => s != null).ToList() ?? new List<TB_Support>();
+            var loadCopies = Loads?.Select(l => l?.DeepCopy()).Where(l => l != null).ToList() ?? new List<TB_Load>();
+
+            var copy = new TB_Model(elemCopies, supCopies, loadCopies)
+            {
+                SelectedLC = SelectedLC,
+                KG = KG != null ? (DenseMatrix)KG.Clone() : null,
+                LM = LM != null ? (DenseMatrix)LM.Clone() : null
+            };
+
+            copy.Disps.Clear();
+            if (Disps != null)
+            {
+                foreach (var d in Disps)
+                {
+                    copy.Disps.Add(d != null ? (double[])d.Clone() : null);
+                }
+            }
+
+            if (Nodes != null && copy.Nodes != null)
+            {
+                int nodeCount = Math.Min(Nodes.Count, copy.Nodes.Count);
+                for (int i = 0; i < nodeCount; i++)
+                {
+                    copy.Nodes[i].Disps.Clear();
+                    if (Nodes[i].Disps == null) continue;
+                    foreach (var d in Nodes[i].Disps)
+                    {
+                        copy.Nodes[i].Disps.Add(d != null ? (double[])d.Clone() : null);
+                    }
+                }
+            }
+
+            if (Sups != null && copy.Sups != null)
+            {
+                int supCount = Math.Min(Sups.Count, copy.Sups.Count);
+                for (int i = 0; i < supCount; i++)
+                {
+                    copy.Sups[i].React.Clear();
+                    if (Sups[i].React == null) continue;
+                    foreach (var r in Sups[i].React)
+                    {
+                        copy.Sups[i].React.Add(r != null ? new List<double>(r) : new List<double>());
+                    }
+                }
+            }
+
             return copy;
         }
 
