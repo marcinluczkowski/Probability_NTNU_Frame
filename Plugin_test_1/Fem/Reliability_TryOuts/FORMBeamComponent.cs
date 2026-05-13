@@ -33,7 +33,7 @@ namespace FORMBeam
         protected override void RegisterInputParams(GH_InputParamManager pManager)
         {
             pManager.AddNumberParameter("L",       "L",       "Beam span [m]",                                          GH_ParamAccess.item, 6.0);
-            pManager.AddNumberParameter("x_load",  "x",       "Point load position from left support [m]",              GH_ParamAccess.item, 3.0);
+            pManager.AddNumberParameter("x_load",  "x",       "Point load position from left support [m]",              GH_ParamAccess.item);
             pManager.AddNumberParameter("Q_k",     "Qk",      "Characteristic point load [kN]",                         GH_ParamAccess.item, 10.0);
             pManager.AddNumberParameter("G_k",     "Gk",      "Characteristic UDL [kN/m]",                              GH_ParamAccess.item, 20.0);
             pManager.AddNumberParameter("fy_k",    "fyk",     "Characteristic yield strength [MPa] (e.g. 355 for S355)",GH_ParamAccess.item, 355.0);
@@ -66,7 +66,7 @@ namespace FORMBeam
         protected override void SolveInstance(IGH_DataAccess DA)
         {
             // ── read inputs ──────────────────────────────────────────────────
-            double L      = 6.0, xLoad = 3.0, Qk = 10.0, Gk = 20.0;
+            double L      = 6.0, xLoad = L/2, Qk = 10.0, Gk = 20.0;
             double fyk    = 355.0, Emean = 210000.0, b = 0.0, h = 0.0;
 
             if (!DA.GetData(0, ref L))      return;
@@ -92,6 +92,17 @@ namespace FORMBeam
                     "x_load clamped to [0.001L, 0.999L] to avoid boundary singularities.");
 
             bool sectionGiven = (b > 0 && h > 0);
+
+            // ── handle zero distributed load ───────────────────────────────────
+            double GkEffective = Gk;
+            if (Gk <= 1e-6)
+            {
+                GkEffective = 0.001 * Qk;
+                if (GkEffective <= 1e-6) GkEffective = 0.01;  // Fallback minimum
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Warning,
+                    $"G_k = 0 or near-zero detected. Using {GkEffective:F4} kN/m as minimum " +
+                    "to enable FORM reliability analysis (prevents zero variance in permanent load RV).");
+            }
 
             // ── Eurocode sizing ───────────────────────────────────────────────
             double W_el_req = BeamMechanics.WelEurocode(L, Gk, Qk, a, fyk);
@@ -144,9 +155,9 @@ namespace FORMBeam
                 double z   = i * L / (nPts - 1);
                 double def = BeamMechanics.DeflectionAt(z, L, Gk, Qk, a, Emean, I_mm4); // mm
                 if (def > maxDef) maxDef = def;
-                double xMm = z * 1000.0;   // m -> mm along beam axis
-                double yMm = -def;          // downward = negative Y
-                defPts.Add(new Point3d(xMm, yMm, 0.0));
+                double xMm = z ;                 // along beam axis [m]
+                double zMm = -def/1000;          // downward = negative z [m]
+                defPts.Add(new Point3d(xMm, 0.0, zMm));
             }
 
             // ── warn if not converged ─────────────────────────────────────────

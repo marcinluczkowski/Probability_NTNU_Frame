@@ -52,8 +52,9 @@ namespace Propability_NTNU_v1.Components
                 var vz = (i < zs.Count) ? zs[i] : (zs.Count > 0 ? zs[zs.Count - 1] : new Vector3d(0, 0, 0));
                 var bucklen = lines[i].Length;
                 var e = new TB_Element_1D(lines[i], tag ?? "beam", ghSec.Value, vz, bucklen);
-                elems.Add(new GH_Element_1D(e));
+                elems.Add(new GH_Element_1D(e));  
             }
+
             DA.SetDataList(0, elems);
         }
 

@@ -20,8 +20,8 @@ namespace FORMBeam
         // ── Limit state in physical space ─────────────────────────────────────
         private static double G_physical(double[] x, double W_el, double L, double a)
         {
-            double fy  = x[0], G = x[1], Q = x[2], thR = x[3], thE = x[4];
-            double M   = BeamMechanics.MaxMoment(L, G, Q, a);
+            double fy  = x[0], G = x[1], Q = x[2], thR = x[3], thE = x[4]; 
+            double M   = BeamMechanics.MaxMoment(L, G, Q, a); // in kNm
             return thR * W_el * fy - thE * M * 1e6;
         }
 

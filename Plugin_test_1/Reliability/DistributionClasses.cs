@@ -248,8 +248,8 @@ namespace Plugin_test_1.Reliability
         /// 
         /// Parameters:
         ///   fyk  : Characteristic yield strength [MPa]
-        ///   Gk   : Characteristic permanent load [kN/m] or [kN]
-        ///   Qk   : Characteristic variable load [kN/m] or [kN]
+        ///   Gk   : Characteristic permanent UDL [kN/m] (distributed load per unit length)
+        ///   Qk   : Characteristic point variable load [kN]
         /// 
         /// Returns:
         ///   Array of 5 RandomVariables: [fy, G, Q, theta_R, theta_E]
@@ -259,7 +259,7 @@ namespace Plugin_test_1.Reliability
             return new[]
             {
                 // Material: lognormal, 5% COV
-                new RandomVariable("fy", fyk, 0.50, 0.05, "lognormal"),
+                new RandomVariable("fy", fyk, 0.01, 0.05, "lognormal"),
 
                 // Permanent load: normal, 10% COV
                 new RandomVariable("G", Gk, 0.50, 0.10, "normal"),

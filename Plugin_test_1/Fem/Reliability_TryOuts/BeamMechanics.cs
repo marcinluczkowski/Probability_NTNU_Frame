@@ -15,7 +15,7 @@ namespace FORMBeam
 
         /// <summary>
         /// Bending moment [kNm] at position z [m] along the beam.
-        /// G: permanent load [kNm], Q: point load [kN] at position a [m] from left support.
+        /// G: permanent load [kN/m] (distributed load per unit length), Q: point load [kN] at position a [m].
         /// </summary>
         public static double MomentAt(double z, double L, double G, double Q, double a)
         {
@@ -82,8 +82,9 @@ namespace FORMBeam
         /// <summary>Required elastic section modulus [mm³] from Eurocode ULS check.</summary>
         public static double WelEurocode(double L, double Gk, double Qk, double a, double fyk)
         {
-            double M_Ed = MaxMoment(L, EurocodeConstants.GammaG * Gk, EurocodeConstants.GammaQ * Qk, a); // kNm
-            return EurocodeConstants.GammaM * M_Ed * 1e6 / fyk;                                   // mm³
+            double M_Ed = MaxMoment(L, EurocodeConstants.GammaG * Gk, EurocodeConstants.GammaQ * Qk, a); // kNm 
+            return EurocodeConstants.GammaM * M_Ed * 1e6 / fyk;                                   // kNm * 1e6 mm/m * N/kNn => Nmm / N/mm^2 = mm³
+           
         }
     }
 }
