@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using Plugin_test_1.Reliability;
 
-namespace FORMBeam
+namespace Plugin_test_1.Reliability.Reliability_TryOuts
 {
     /// <summary>
     /// Simply-supported beam mechanics: bending moments and deflections.

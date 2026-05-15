@@ -5,7 +5,7 @@ using Plugin_test_1.Reliability;
 using Rhino.Geometry;
 using MathNet.Numerics.Distributions;
 
-namespace FORMBeam
+namespace Plugin_test_1.Reliability.Reliability_TryOuts
 {
     public class FORMBeamComponent : GH_Component
     {

@@ -1,4 +1,4 @@
-namespace FORMBeam
+namespace Plugin_test_1.Reliability.Reliability_TryOuts
 {
     /// <summary>Eurocode partial factors used throughout the component.</summary>
     internal static class Eurocode

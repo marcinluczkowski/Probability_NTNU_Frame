@@ -2,7 +2,7 @@ using System;
 using MathNet.Numerics.Distributions;
 using Plugin_test_1.Reliability;
 
-namespace FORMBeam
+namespace Plugin_test_1.Reliability.Reliability_TryOuts
 {
     /// <summary>
     /// First Order Reliability Method — Hasofer-Lind-Rackwitz-Fiessler (HLRF) algorithm.

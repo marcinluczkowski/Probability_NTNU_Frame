@@ -3,7 +3,6 @@ using System.Collections.Generic;
 
 using Grasshopper.Kernel;
 using Rhino.Geometry;
-using FORMBeam;
 using System.Linq;
 
 namespace Plugin_test_1.Reliability
@@ -83,7 +82,13 @@ namespace Plugin_test_1.Reliability
                 double beta_FORM;
                 bool converged;
 
+
+<<<<<<< TODO: Unmerged change from project 'Plugin_test_1 (net7.0)', Before:
                 FORMBeam.FORM.Run(Wel, L, a, rvs.Cast<RandomVariable>().ToArray(), out beta_FORM, out converged);
+=======
+                FORM.Run(Wel, L, a, rvs.Cast<RandomVariable>().ToArray(), out beta_FORM, out converged);
+>>>>>>> After
+                Reliability_TryOuts.FORM.Run(Wel, L, a, rvs.Cast<RandomVariable>().ToArray(), out beta_FORM, out converged);
 
                 // Approximate design point for importance sampling (this is a very crude approximation - ideally should be the actual design point from FORM)
                 double[] designPoint = rvs.Select(rv => rv.Mean).ToArray();

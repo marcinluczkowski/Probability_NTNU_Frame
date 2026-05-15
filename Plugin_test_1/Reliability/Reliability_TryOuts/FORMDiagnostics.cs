@@ -1,9 +1,8 @@
 using System;
 using MathNet.Numerics.Distributions;
 using Plugin_test_1.Reliability;
-using FORMBeam;
 
-namespace Plugin_test_1.Fem.Reliability_TryOuts
+namespace Plugin_test_1.Reliability.Reliability_TryOuts
 {
     /// <summary>
     /// FORM Diagnostics - Debug helper to understand HLRF behavior

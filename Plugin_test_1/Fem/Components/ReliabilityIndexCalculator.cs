@@ -386,16 +386,18 @@ namespace Plugin_test_1.Fem.Components
                     var f = e.Calc_Forces(lcId);
 
                     double nEd = Math.Max(Math.Abs(f[0]), Math.Abs(f[6]));
-                    double myEd = Math.Max(Math.Abs(f[4]), Math.Abs(f[10]));
-                    double mzEd = Math.Max(Math.Abs(f[5]), Math.Abs(f[11]));
+                    double myEd = Math.Max(Math.Abs(f[4]), Math.Abs(f[10]));  // in kNm
+                    double mzEd = Math.Max(Math.Abs(f[5]), Math.Abs(f[11]));  // in kNm
 
                     double a = e.Sec.Area;
-                    double wy = e.Sec.Wy / 1000.0;  
-                    double wz = e.Sec.Wz / 1000.0;
+                    double wy = e.Sec.Wy;  // in mm³
+                    double wz = e.Sec.Wz;  // in mm³
 
                     if (a <= 0 || wy <= 0 || wz <= 0) continue;
 
-                    double coeff = nEd / a + myEd / wy + mzEd / wz;
+                    // Stress = nEd/a + myEd*1e6/wy + mzEd*1e6/wz [MPa]
+                    // (kNm converted to N·mm: kNm * 1e6 = N·mm)
+                    double coeff = nEd / a + myEd * 1e6 / wy + mzEd * 1e6 / wz;
                     if (coeff > maxCoeff) maxCoeff = coeff;
                 }
             }
