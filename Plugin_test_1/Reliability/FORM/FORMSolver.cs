@@ -1,7 +1,5 @@
 using System;
 using System.Collections.Generic;
-using MathNet.Numerics.Distributions;
-
 namespace Plugin_test_1.Reliability.FORM
 {
     /// <summary>
@@ -69,7 +67,6 @@ namespace Plugin_test_1.Reliability.FORM
             // Initialize: u = 0 (mean point in standard normal space)
             double[] u = new double[n];
             double[] x = new double[n];
-            double[] u_prev = new double[n];
             double[] grad_g_u = new double[n];  // gradient in U-space
 
             // Iteration loop
@@ -173,6 +170,7 @@ namespace Plugin_test_1.Reliability.FORM
                 // Convergence criteria: |g| < epsilon1 AND ‖u_new - u‖ < epsilon2
                 if (Math.Abs(g) < epsilon1 && displacement_norm < epsilon2)
                 {
+                    u = u_new;
                     converged = true;
                     result.Converged = true;
                     result.Beta = beta;
@@ -221,6 +219,76 @@ namespace Plugin_test_1.Reliability.FORM
             result.ComputeProbabilityOfFailure();
 
             return result;
+        }
+
+        /// <summary>
+        /// Self-contained static verification of FORM core math using an analytic simply-supported beam deflection limit state.
+        /// Random variables:
+        /// E ~ Normal(200e9, 10e9), F ~ Normal(50000, 7500), I ~ Normal(8.33e-5, 4.17e-6)
+        /// Limit state:
+        /// g = (5.0 / 300) - (F * 5.0^3) / (48 * E * I)
+        /// Expected: β ≈ 2.75, Pf ≈ 0.003, α_F ≈ 0.986 (within 1%).
+        /// </summary>
+        /// <param name="report">Detailed pass/fail report with computed values.</param>
+        /// <returns>True if all target values match within 1%; otherwise false.</returns>
+        public static bool ValidateCoreMathAnalyticBeam(out string report)
+        {
+            var variables = new List<RandomVariable>
+            {
+                new RandomVariable("E", DistributionType.Normal, 200e9, 10e9),
+                new RandomVariable("F", DistributionType.Normal, 50000.0, 7500.0),
+                new RandomVariable("I", DistributionType.Normal, 8.33e-5, 4.17e-6),
+            };
+
+            Func<double[], double> limitState = x =>
+            {
+                double e = x[0];
+                double f = x[1];
+                double i = x[2];
+                return (5.0 / 300.0) - (f * Math.Pow(5.0, 3.0)) / (48.0 * e * i);
+            };
+
+            var solver = new FORMSolver();
+            FORMResult result = solver.Solve(
+                variables,
+                limitState,
+                epsilon1: 1e-9,
+                epsilon2: 1e-9,
+                maxIterations: 100);
+
+            const double expectedBeta = 2.75;
+            const double expectedPf = 0.003;
+            const double expectedAlphaF = 0.986;
+            const double relativeTolerance = 0.01; // 1%
+
+            double alphaF = (result.AlphaFactors != null && result.AlphaFactors.Length > 1)
+                ? Math.Abs(result.AlphaFactors[1])
+                : double.NaN;
+
+            bool betaOk = IsWithinRelativeTolerance(result.Beta, expectedBeta, relativeTolerance);
+            bool pfOk = IsWithinRelativeTolerance(result.ProbabilityOfFailure, expectedPf, relativeTolerance);
+            bool alphaFOk = IsWithinRelativeTolerance(alphaF, expectedAlphaF, relativeTolerance);
+            bool allOk = result.Converged && betaOk && pfOk && alphaFOk;
+
+            report =
+                $"FORM Analytic Beam Verification\n" +
+                $"Converged: {result.Converged}\n" +
+                $"Beta: {result.Beta:F6} (expected {expectedBeta:F6}, pass={betaOk})\n" +
+                $"Pf: {result.ProbabilityOfFailure:F6} (expected {expectedPf:F6}, pass={pfOk})\n" +
+                $"Alpha_F: {alphaF:F6} (expected {expectedAlphaF:F6}, pass={alphaFOk})\n" +
+                $"Overall: {(allOk ? "PASS" : "FAIL")}";
+
+            return allOk;
+        }
+
+        private static bool IsWithinRelativeTolerance(double value, double expected, double toleranceFraction)
+        {
+            if (double.IsNaN(value) || double.IsInfinity(value))
+                return false;
+            if (Math.Abs(expected) < 1e-16)
+                return Math.Abs(value - expected) <= toleranceFraction;
+
+            return Math.Abs(value - expected) / Math.Abs(expected) <= toleranceFraction;
         }
     }
 }

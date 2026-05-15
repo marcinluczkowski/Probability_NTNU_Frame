@@ -207,7 +207,12 @@ namespace Plugin_test_1.Reliability.FORM
             FORMResult result;
             try
             {
-                result = solver.Solve(variables, limitStateFunction, tolerance, maxIter);
+                result = solver.Solve(
+                    variables,
+                    limitStateFunction,
+                    epsilon1: tolerance,
+                    epsilon2: tolerance,
+                    maxIterations: maxIter);
             }
             catch (Exception ex)
             {
