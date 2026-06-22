@@ -1,12 +1,11 @@
 using System;
 using System.Collections.Generic;
 using Grasshopper.Kernel;
-using Plugin_test_1.Reliability;
 using Propability_NTNU_v1;
 using Propability_NTNU_v1.Classes.Toolbox;
 using Rhino.Geometry;
 
-namespace Plugin_test_1.Fem.Components
+namespace Plugin_test_1.Reliability
 {
     public class AlphaUtilizationSearch : GH_Component
     {

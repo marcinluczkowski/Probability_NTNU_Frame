@@ -1,9 +1,10 @@
+using Grasshopper.Kernel;
+using MathNet.Numerics.Distributions;
+using Plugin_test_1.Reliability;
+using Plugin_test_1.Reliability.FORM;
+using Rhino.Geometry;
 using System;
 using System.Collections.Generic;
-using Grasshopper.Kernel;
-using Plugin_test_1.Reliability;
-using Rhino.Geometry;
-using MathNet.Numerics.Distributions;
 
 namespace Plugin_test_1.Reliability.Reliability_TryOuts
 {
@@ -52,12 +53,13 @@ namespace Plugin_test_1.Reliability.Reliability_TryOuts
         protected override void RegisterOutputParams(GH_OutputParamManager pManager)
         {
             pManager.AddPointParameter ("deflection_pts", "Def",   "50 points forming the deformed beam shape (coords in mm, deflection along -Y)", GH_ParamAccess.list);
-            pManager.AddNumberParameter("max_deflection", "dmax",  "Maximum deflection [mm]",                                                         GH_ParamAccess.item);
-            pManager.AddNumberParameter("utilization",    "Util",  "Elastic bending utilization M_Ed/M_Rd  (NaN if no section given)",                GH_ParamAccess.item);
-            pManager.AddNumberParameter("beta",           "β",     "FORM reliability index",                                                           GH_ParamAccess.item);
-            pManager.AddNumberParameter("Pf",             "Pf",    "Probability of failure",                                                           GH_ParamAccess.item);
-            pManager.AddNumberParameter("W_el_required",  "Wel",   "Required elastic section modulus [mm³] from Eurocode sizing",                      GH_ParamAccess.item);
-            pManager.AddBooleanParameter("converged",     "Conv",  "True if HLRF algorithm converged",                                                 GH_ParamAccess.item);
+            pManager.AddNumberParameter("max_deflection", "dmax",  "Maximum deflection [mm]", GH_ParamAccess.item);
+            pManager.AddNumberParameter("utilization",    "Util",  "Elastic bending utilization M_Ed/M_Rd  (NaN if no section given)", GH_ParamAccess.item);
+            pManager.AddNumberParameter("beta",           "β",     "FORM reliability index", GH_ParamAccess.item);
+            pManager.AddNumberParameter("Pf",             "Pf",    "Probability of failure", GH_ParamAccess.item);
+            pManager.AddNumberParameter("Alpha",          "α",     "Sensitivity factors (alpha) in u-space", GH_ParamAccess.list);
+            pManager.AddNumberParameter("W_el_required",  "Wel",   "Required elastic section modulus [mm³] from Eurocode sizing", GH_ParamAccess.item);
+            pManager.AddBooleanParameter("converged",     "Conv",  "True if HLRF algorithm converged", GH_ParamAccess.item);
         }
 
         // =====================================================================
@@ -120,12 +122,17 @@ namespace Plugin_test_1.Reliability.Reliability_TryOuts
             }
 
             // ── build random variables ────────────────────────────────────────
-            var rvs = RandomVariable.BuildEurocodeRVs(fyk, Gk, Qk);
+            //var rvs = RandomVariable.BuildEurocodeRVs(fyk,Gk, Qk);
+            // Construct RVs explicitly to match the FEM-FORM setup
+            var rvs = new RandomVariable[2];
+            rvs[0] = new RandomVariable("fy", fyk, 0.01, 0.05, "lognormal");
+            rvs[1] = new RandomVariable("Q", Qk, 0.98, 0.26, "gumbel");
 
             // ── FORM ──────────────────────────────────────────────────────────
             double beta;
             bool   converged;
-            FORM.Run(W_el_form, L, a, rvs, out beta, out converged);
+            double[] alpha;
+            FORM.Run(W_el_form, L, a, rvs, out beta, out converged, out alpha);
 
             double Pf = Normal.CDF(0, 1, -beta);
 
@@ -171,8 +178,9 @@ namespace Plugin_test_1.Reliability.Reliability_TryOuts
             DA.SetData    (2, utilization);
             DA.SetData    (3, beta);
             DA.SetData    (4, Pf);
-            DA.SetData    (5, W_el_req);
-            DA.SetData    (6, converged);
+            DA.SetDataList(5, alpha);
+            DA.SetData    (6, W_el_req);
+            DA.SetData    (7, converged);
         }
     }
 }

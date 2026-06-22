@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using MathNet.Numerics;
 using MathNet.Numerics.Distributions;
 
 namespace Plugin_test_1.Reliability.FORM
@@ -142,7 +143,7 @@ namespace Plugin_test_1.Reliability.FORM
                 sb.AppendLine("─ Design Point (X-space) ─");
                 for (int i = 0; i < MPP_X.Length; i++)
                 {
-                    sb.AppendLine($"x*[{i}] = {MPP_X[i]:E12}");
+                    sb.AppendLine($"x*[{i}] = {MPP_X[i].Round(4)}");
                 }
                 sb.AppendLine();
             }

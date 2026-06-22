@@ -20,16 +20,16 @@ namespace Plugin_test_1.Reliability.Reliability_TryOuts
         // ── Limit state in physical space ─────────────────────────────────────
         private static double G_physical(double[] x, double W_el, double L, double a)
         {
-            double fy  = x[0], G = x[1], Q = x[2], thR = x[3], thE = x[4]; 
-            double M   = BeamMechanics.MaxMoment(L, G, Q, a); // in kNm
-            return thR * W_el * fy - thE * M * 1e6;
+            double fy  = x[0], Q = x[1]; // Q = x[2] thR = x[3], thE = x[4]; 
+            double M   = BeamMechanics.MaxMoment(L, 0.0, Q, a); // in kNm
+            return W_el * fy - M * 1e6;
         }
 
         // ── Limit state in standard-normal space ──────────────────────────────
         private static double G_u(double[] u, RandomVariable[] rvs, double W_el, double L, double a)
         {
-            double[] x = new double[5];
-            for (int i = 0; i < 5; i++) x[i] = rvs[i].UtoX(u[i]);
+            double[] x = new double[2];
+            for (int i = 0; i < 2; i++) x[i] = rvs[i].UtoX(u[i]);
             return G_physical(x, W_el, L, a);
         }
 
@@ -37,12 +37,14 @@ namespace Plugin_test_1.Reliability.Reliability_TryOuts
         // dg/du_i = (dg/dx_i) * (dx_i/du_i)   where dx/du = phi(u)/f(x)
         private static double[] GradU(double[] u, RandomVariable[] rvs, double W_el, double L, double a)
         {
-            double[] x     = new double[5];
-            double[] phiU  = new double[5];
-            double[] fX    = new double[5];
-            double[] dxDu  = new double[5];
+            int n = rvs.Length;
 
-            for (int i = 0; i < 5; i++)
+            double[] x     = new double[n];
+            double[] phiU  = new double[n];
+            double[] fX    = new double[n];
+            double[] dxDu  = new double[n];
+
+            for (int i = 0; i < n; i++)
             {
                 x[i]    = rvs[i].UtoX(u[i]);
                 phiU[i] = Normal.PDF(0, 1, u[i]);
@@ -50,26 +52,24 @@ namespace Plugin_test_1.Reliability.Reliability_TryOuts
                 dxDu[i] = phiU[i] / fX[i];
             }
 
-            double fy  = x[0], G = x[1], Q = x[2], thR = x[3], thE = x[4];
-            double M   = BeamMechanics.MaxMoment(L, G, Q, a);
+            double fy = x[0], Q = x[1]; // Q = x[2], thR = x[3], thE = x[4];
+            double M   = BeamMechanics.MaxMoment(L, 0.0, Q, a);
 
             // Finite difference for dM/dG and dM/dQ
-            double dMdG = (BeamMechanics.MaxMoment(L, G + FdEps, Q, a)
-                         - BeamMechanics.MaxMoment(L, G - FdEps, Q, a)) / (2.0 * FdEps);
-            double dMdQ = (BeamMechanics.MaxMoment(L, G, Q + FdEps, a)
-                         - BeamMechanics.MaxMoment(L, G, Q - FdEps, a)) / (2.0 * FdEps);
+            //double dMdG = (BeamMechanics.MaxMoment(L, 0.0 + FdEps, Q, a)
+            //             - BeamMechanics.MaxMoment(L, 0.0 - FdEps, Q, a)) / (2.0 * FdEps);
+            double dMdQ = (BeamMechanics.MaxMoment(L, 0.0, Q + FdEps, a)
+                         - BeamMechanics.MaxMoment(L, 0.0, Q - FdEps, a)) / (2.0 * FdEps);
 
-            double[] dgDx = new double[5]
+            double[] dgDx = new double[2]
             {
-                thR * W_el,          // dg/d_fy
-               -thE * dMdG * 1e6,    // dg/dG
-               -thE * dMdQ * 1e6,    // dg/dQ
-                W_el * fy,           // dg/d_theta_R
-               -M * 1e6              // dg/d_theta_E
+                W_el,                    // dg/dfy
+               -dMdQ * 1e6              // dg/dQ
             };
 
-            double[] grad = new double[5];
-            for (int i = 0; i < 5; i++) grad[i] = dgDx[i] * dxDu[i];
+            double[] grad = new double[2];
+            for (int i = 0; i < 2; i++) grad[i] = dgDx[i] * dxDu[i];
+
             return grad;
         }
 
@@ -82,13 +82,14 @@ namespace Plugin_test_1.Reliability.Reliability_TryOuts
         /// </summary>
         public static double Run(double W_el, double L, double a,
                                  RandomVariable[] rvs,
-                                 out double beta, out bool converged)
+                                 out double beta, out bool converged, out double[] alpha)
         {
             int n = rvs.Length;
             double[] u = new double[n]; // start at origin
 
             converged = false;
             beta      = double.NaN;
+            alpha = new double[n];
 
             for (int iter = 0; iter < MaxIter; iter++)
             {
@@ -107,7 +108,6 @@ namespace Plugin_test_1.Reliability.Reliability_TryOuts
                 }
 
                 // Direction cosines (alpha vector)
-                double[] alpha = new double[n];
                 for (int i = 0; i < n; i++) alpha[i] = grad[i] / ng;
 
                 // Beta along search direction
@@ -138,7 +138,21 @@ namespace Plugin_test_1.Reliability.Reliability_TryOuts
             double betaSq = 0.0;
             for (int i = 0; i < n; i++) betaSq += u[i] * u[i];
             beta = Math.Sqrt(betaSq);
+
+            // Final alpha = u*/β 
+            if (beta > 1e-16)
+                for (int i = 0; i < n; i++) alpha[i] = u[i] / beta;
+
             return beta;
+        }
+
+        // Backwards-compatible overload: original signature without alpha
+        public static double Run(double W_el, double L, double a,
+                                 RandomVariable[] rvs,
+                                 out double beta, out bool converged)
+        {
+            double[] alpha;
+            return Run(W_el, L, a, rvs, out beta, out converged, out alpha);
         }
     }
 }

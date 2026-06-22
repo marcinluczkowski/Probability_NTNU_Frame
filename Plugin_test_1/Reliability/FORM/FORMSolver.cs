@@ -52,7 +52,7 @@ namespace Plugin_test_1.Reliability.FORM
         public FORMResult Solve(
             List<RandomVariable> variables,
             Func<double[], double> limitStateFunction,
-            double epsilon1 = 1e-6,
+            double epsilon1 = 1e-3,
             double epsilon2 = 1e-6,
             int maxIterations = 50)
         {
@@ -65,6 +65,45 @@ namespace Plugin_test_1.Reliability.FORM
 
             int n = variables.Count;
             var result = new FORMResult(n);
+
+            // ===== FOSM PRE-SCREENING =====
+            // Cheap check before running HL-RF. If the structure is clearly safe
+            // or clearly unsafe at the mean, return an estimate rather than iterate.
+            double[] meanX = new double[n];
+            for (int i = 0; i < n; i++) meanX[i] = variables[i].Mean;
+
+            double g_mean = limitStateFunction(meanX);
+            double var_g_FOSM = 0.0;
+
+            for (int i = 0; i < n; i++)
+            {
+                double h_i = variables[i].StdDev * 1e-3 + 1e-9;
+                double[] xp = (double[])meanX.Clone(); xp[i] += h_i;
+                double[] xm = (double[])meanX.Clone(); xm[i] -= h_i;
+                double dg_dx = (limitStateFunction(xp) - limitStateFunction(xm)) / (2.0 * h_i);
+                var_g_FOSM += Math.Pow(dg_dx * variables[i].StdDev, 2);
+            }
+
+            double sigma_g_FOSM = Math.Sqrt(var_g_FOSM);
+            double beta_FOSM = sigma_g_FOSM > 1e-30 ? g_mean / sigma_g_FOSM : (g_mean > 0 ? 999.0 : -999.0);
+
+            // Early exit if very safe (FORM has no useful precision beyond β ≈ 7)
+            if (beta_FOSM > 16.0)
+            {
+                result.Beta = beta_FOSM;
+                result.ProbabilityOfFailure = Normal.CDF(0, 1, -beta_FOSM);
+                result.Converged = true;
+                result.Iterations = 0;
+                result.ConvergenceMessage = $"Over-designed: FOSM β = {beta_FOSM:F2} (Pf < 1e-12). FORM iteration skipped.";
+                result.BetaHistory.Add(beta_FOSM);
+                for (int i = 0; i < n; i++)
+                {
+                    result.MPP_U[i] = 0;
+                    result.MPP_X[i] = variables[i].Mean;
+                    result.AlphaFactors[i] = 0;
+                }
+                return result;
+            }
 
             // Initialize: u = 0 (mean point in standard normal space)
             double[] u = new double[n];
@@ -81,7 +120,8 @@ namespace Plugin_test_1.Reliability.FORM
                 // ===== STEP 1: Transform u → x =====
                 for (int i = 0; i < n; i++)
                 {
-                    x[i] = variables[i].ToX(u[i]);
+                    // R-F method only instead of full isoprobabilistic transformation
+                    x[i] = variables[i].EquivNormalMean + u[i] * variables[i].EquivNormalStdDev;
                 }
 
                 // ===== STEP 2: Compute Rackwitz-Fiessler equivalent normal parameters =====
@@ -93,25 +133,28 @@ namespace Plugin_test_1.Reliability.FORM
                 // ===== STEP 3: Evaluate g(x) =====
                 double g = limitStateFunction(x);
 
-                // ===== STEP 4: Compute gradient ∇g in X-space via forward finite differences =====
-                // Reuse g(x) computed above as base value
+                // ===== STEP 4: Compute gradient ∇g in X-space via central finite differences =====
                 double[] grad_g_x = new double[n];
 
                 for (int i = 0; i < n; i++)
                 {
-                    // Compute step size: h = |x[i]| × 1e-5 + 1e-9
-                    double h = Math.Abs(x[i]) * 1e-5 + 1e-9;
+                    // h = CoV * mean * 1e-3 + 1e-9 = StdDev * 1e-3 + 1e-9
+                    double h = variables[i].StdDev * 1e-3 + 1e-9;
 
-                    // Create perturbed point: x + h·e_i
-                    double[] x_pert = new double[n];
-                    Array.Copy(x, x_pert, n);
-                    x_pert[i] += h;
+                    // Create perturbed point +h
+                    double[] x_pert_plus = new double[n];
+                    Array.Copy(x, x_pert_plus, n);
+                    x_pert_plus[i] += h;
+                    double g_pert_plus = limitStateFunction(x_pert_plus);
 
-                    // Evaluate g at perturbed point
-                    double g_pert = limitStateFunction(x_pert);
+                    // Create perturbed point -h
+                    double[] x_pert_minus = new double[n];
+                    Array.Copy(x, x_pert_minus, n);
+                    x_pert_minus[i] -= h;
+                    double g_pert_minus = limitStateFunction(x_pert_minus);
 
-                    // Finite difference: ∂g/∂x_i ≈ (g(x+h·e_i) - g(x)) / h
-                    grad_g_x[i] = (g_pert - g) / h;
+                    // Central difference: ∂g/∂x_i ≈ (g(x+h) - g(x-h)) / (2h)
+                    grad_g_x[i] = (g_pert_plus - g_pert_minus) / (2.0 * h);
                 }
 
                 // ===== STEP 5: Transform gradient to U-space =====
@@ -131,23 +174,45 @@ namespace Plugin_test_1.Reliability.FORM
                     norm_sq += grad_g_u[i] * grad_g_u[i];
                 }
 
-                // Guard: Check if gradient is zero
-                if (norm_sq < 1e-14)
+
+                // Guard: gradient below noise floor → fall back to FOSM with warning
+                if (norm_sq < 1e-12 * Math.Max(Math.Abs(g) * Math.Abs(g), 1.0))
                 {
-                    throw new InvalidOperationException(
-                        "Gradient of limit state function is zero at current point. " +
-                        "Check your limit state function definition. " +
-                        $"Point: x = [{string.Join(", ", x)}]");
+                    result.Beta = Math.Abs(beta_FOSM);
+                    result.ProbabilityOfFailure = Normal.CDF(0, 1, -Math.Abs(beta_FOSM));
+                    result.Converged = false;
+                    result.Iterations = iter;
+                    result.ConvergenceMessage =
+                        $"Gradient below noise floor at iteration {iter}. " +
+                        $"Reporting FOSM estimate: β ≈ {beta_FOSM:F3}. " +
+                        $"Try a smaller section to get a meaningful FORM β";
+                    for (int i = 0; i < n; i++)
+                    {
+                        result.MPP_U[i] = u[i];
+                        result.MPP_X[i] = variables[i].ToX(u[i]);
+                        result.AlphaFactors[i] = 0;
+                    }
+                    return result;
+
                 }
 
                 // HL-RF scalar
                 double scalar = (dot_gu - g) / norm_sq;
 
-                // Update u_new = scalar × ∇g_u
+                // Update u_new with relaxation and step bounding to prevent Beta explosions
+                double relax = 1.0; // standard relaxation
                 double[] u_new = new double[n];
                 for (int i = 0; i < n; i++)
                 {
-                    u_new[i] = scalar * grad_g_u[i];
+                    double target_step = ((dot_gu - g) / norm_sq) * grad_g_u[i];
+                    double delta_u = target_step - u[i];
+
+                    // Box bounds on U-space jumps (max 6.0 per iteration) stop $10^6$ infinity jumps 
+                    // when navigating extremely noisy or flat limit surfaces early in descent.
+                    if (delta_u > 6.0) delta_u = 6.0;
+                    if (delta_u < -6.0) delta_u = -6.0;
+
+                    u_new[i] = u[i] + relax * delta_u;
                 }
 
                 // ===== STEP 7: Compute β = ‖u_new‖ =====
@@ -173,6 +238,7 @@ namespace Plugin_test_1.Reliability.FORM
                 // Convergence criteria: |g| < epsilon1 AND ‖u_new - u‖ < epsilon2
                 if (Math.Abs(g) < epsilon1 && displacement_norm < epsilon2)
                 {
+                    u = u_new; // Update to final point before breaking
                     converged = true;
                     result.Converged = true;
                     result.Beta = beta;
@@ -217,8 +283,15 @@ namespace Plugin_test_1.Reliability.FORM
                 }
             }
 
-            // Compute probability of failure
-            result.ComputeProbabilityOfFailure();
+            // Signed β: if g(mean) < 0, the origin is in the failure region and Pf = Φ(+β), not Φ(-β)
+            double signed_beta = (g_mean >= 0 ? 1.0 : -1.0) * result.Beta;
+            result.ProbabilityOfFailure = Normal.CDF(0, 1, -signed_beta);
+
+            // Annotate the convergence message if we're in the failure-dominant regime
+            if (g_mean < 0)
+            {
+                result.ConvergenceMessage += $"  [NOTE: g(mean) = {g_mean:G4} < 0 — mean state is already in failure region; reported Pf reflects this.]";
+            }
 
             return result;
         }

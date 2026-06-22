@@ -132,22 +132,35 @@ namespace Plugin_test_1.Reliability
 
                 Mean = mu;
                 StdDev = sigma;
+
             }
             else if (DistType == "gumbel")
             {
-                Mean = CharValue / 1.35;
-                StdDev = Mean * COV;
+                // The characteristic value is the p-fractile of the ANNUAL maxima:
+                //   x_p = mean_annual + zp * std,  with zp = (cp - gamma) * (sqrt6/pi),
+                //   cp = -ln(-ln(p)).
+                // The Gumbel std (and scale) are invariant with the reference period T,
+                // while mean_T = mean_annual + scale * ln(T). Imposing a fixed T-year COV
+                // cov_T = std / mean_T and writing mean_annual = std * A gives
+                //   A = 1/cov_T - (sqrt6/pi) * ln(T).
+                double cp = -Math.Log(-Math.Log(p));                        // -ln(-ln(p))
+                double zp = (cp - Euler_Gamma) * (Math.Sqrt(6) / Math.PI);  // standardised annual fractile
 
-                double beta = StdDev * Math.Sqrt(6) / Math.PI;
-                double uT = Mean - 0.5772156649 * beta; // Euler gamma
+                double covT = COV;
 
-                // 3. Convert to 1-year (if needed)
-                double u1 = uT - beta * Math.Log(ReferenceperiodYears);
-                double Mean1 = u1 + 0.5772156649 * beta;
+                double A = 1.0 / covT - (Math.Sqrt(6) / Math.PI) * Math.Log(ReferenceperiodYears);
+                double denom = A + zp;
 
-                LocationGumbel = u1;
-                LocationGumbelT = uT;
-                ScaleGumbel = beta;
+                StdDev = CharValue / denom;                       // invariant std
+                double scale = StdDev * Math.Sqrt(6) / Math.PI;   // invariant scale
+
+                Mean = StdDev * A;                                // annual (1-year) mean
+                COV = StdDev / Mean;                              // store annual COV
+
+                ScaleGumbel = scale;
+                LocationGumbel = Mean - Euler_Gamma * scale;                                // annual location
+                MeanGumbelT = Mean + scale * Math.Log(ReferenceperiodYears);                // T-year mean
+                LocationGumbelT = LocationGumbel + scale * Math.Log(ReferenceperiodYears);  // T-year location
             }
             else
             {
@@ -172,7 +185,7 @@ namespace Plugin_test_1.Reliability
             if (p <= 0 || p >= 1)
                 throw new ArgumentOutOfRangeException(nameof(p), "p must be in (0, 1)");
 
-            return LocationGumbelT - ScaleGumbel * Math.Log(-Math.Log(p)); //unsure if this is 100% correct for inverse CDF
+            return LocationGumbelT - ScaleGumbel * Math.Log(-Math.Log(p)); 
         }
 
         public double PDF(double x)

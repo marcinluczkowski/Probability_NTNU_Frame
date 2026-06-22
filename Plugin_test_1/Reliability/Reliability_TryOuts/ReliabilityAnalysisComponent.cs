@@ -58,8 +58,9 @@ namespace Plugin_test_1.Reliability.Reliability_TryOuts
         {
             pManager.AddNumberParameter("beta", "β", "FORM reliability index", GH_ParamAccess.item);
             pManager.AddNumberParameter("Pf", "Pf", "Probability of failure", GH_ParamAccess.item);
+            pManager.AddNumberParameter("Alpha", "α", "Sensitivity factors (alpha) in u-space", GH_ParamAccess.list);
             pManager.AddNumberParameter("W_el_required", "Wel_req", "Required section modulus [mm³] from Eurocode ULS", GH_ParamAccess.item);
-            pManager.AddNumberParameter("utilization", "Util", "Utilization ratio M_Ed/M_Rd (calculated for the section used in FORM analysis)", GH_ParamAccess.item);
+            pManager.AddNumberParameter("utilization", "Util", "Utilization ratio M_Ed/M_Rd (calculated for the section, no y-factors)", GH_ParamAccess.item);
             pManager.AddBooleanParameter("converged", "Conv", "True if HLRF algorithm converged", GH_ParamAccess.item);
         }
 
@@ -178,12 +179,16 @@ namespace Plugin_test_1.Reliability.Reliability_TryOuts
             double W_el_form = sectionGiven ? welInput : W_el_req;
 
             // ── build random variables ────────────────────────────────────────
-            var rvs = RandomVariable.BuildEurocodeRVs(fyk, Gk, Qk);
+            //var rvs = RandomVariable.BuildEurocodeRVs(fyk, Gk, Qk);
+            var rvs = new RandomVariable[2];
+            rvs[0] = new RandomVariable("fy", fyk, 0.01, 0.05, "lognormal");
+            rvs[1] = new RandomVariable("Q", Qk, 0.98, 0.26, "gumbel");
 
             // ── FORM ──────────────────────────────────────────────────────────
             double beta;
             bool converged;
-            FORM.Run(W_el_form, L, a, rvs, out beta, out converged);
+            double[] alpha;
+            FORM.Run(W_el_form, L, a, rvs, out beta, out converged, out alpha);
 
             double Pf = Normal.CDF(0, 1, -beta);
 
@@ -204,9 +209,10 @@ namespace Plugin_test_1.Reliability.Reliability_TryOuts
             // ── set outputs ───────────────────────────────────────────────────
             DA.SetData(0, beta);
             DA.SetData(1, Pf);
-            DA.SetData(2, W_el_req);
-            DA.SetData(3, utilization);
-            DA.SetData(4, converged);
+            DA.SetDataList(2, alpha);
+            DA.SetData(3, W_el_req);
+            DA.SetData(4, utilization);
+            DA.SetData(5, converged);
         }
 
         /// <summary>

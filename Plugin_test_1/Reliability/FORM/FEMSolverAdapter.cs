@@ -1,7 +1,8 @@
+using Grasshopper.Kernel;
+using Propability_NTNU_v1.Classes.Toolbox;
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using Propability_NTNU_v1.Classes.Toolbox;
 
 namespace Plugin_test_1.Reliability.FORM
 {
@@ -71,8 +72,6 @@ namespace Plugin_test_1.Reliability.FORM
                 throw new ArgumentNullException(nameof(templateModel));
             if (parameterMap == null)
                 throw new ArgumentNullException(nameof(parameterMap));
-            if (capacity <= 0)
-                throw new ArgumentException("Capacity must be positive.", nameof(capacity));
 
             _templateModel = templateModel;
             _parameterMap = parameterMap;
@@ -111,18 +110,42 @@ namespace Plugin_test_1.Reliability.FORM
             // Step 2: Update parameters from x[] using the parameter map
             UpdateModelParameters(workingModel, x);
 
+            if (workingModel.Elem1Ds != null && workingModel.Elem1Ds.Count > 0)
+            {
+                var elem0 = workingModel.Elem1Ds[0];
+                if (elem0?.Sec != null)
+                {
+                    System.Diagnostics.Debug.WriteLine($"[DIAG] Mat.Fy   = {elem0.Sec.Mat?.Fy}");
+                    System.Diagnostics.Debug.WriteLine($"[DIAG] Sec.Area = {elem0.Sec.Area}");
+                    System.Diagnostics.Debug.WriteLine($"[DIAG] Sec.Iy   = {elem0.Sec.Iy}");
+                    System.Diagnostics.Debug.WriteLine($"[DIAG] Sec.Wy   = {elem0.Sec.Wy}");
+                }
+            }
+
             // Step 3: Re-solve the FEM system
             // VERIFIED: SolveLS re-assembles K from scratch on every instantiation (ST_SolveLS.Solve()).
             // Element stiffness reflects updated Sec.Mat properties (ST_Element_1D.Calc_ElemStiffMX()).
             SolveLS solver = new SolveLS(ref workingModel);
 
             // Step 4: Extract response based on responseType
-            double response = ExtractResponse(workingModel);
 
-            // Step 5: Compute limit state function
-            // g(x) = capacity - response
-            // where response is max deflection, max stress, etc.
-            double g = _capacity - response;
+            double g;
+
+            // If capacity is uniquely flagged for auto-evaluation
+            if (_capacity < 0 && _responseType.Equals("Stress", StringComparison.OrdinalIgnoreCase))
+            {
+                // g = minimal (Fy - local_stress) across all elements
+                double response = ExtractResponse(workingModel);
+                g = ExtractAutoStressLimitState(workingModel);
+                System.Diagnostics.Debug.WriteLine($"[DIAG-branch] _capacity={_capacity}, _responseType_1='{_responseType}', autoStress={_capacity < 0 && _responseType.Equals("Stress", StringComparison.OrdinalIgnoreCase)}, returned g={g}");
+            }
+            else
+            {
+                // g(x) = capacity - response
+                // where response is max deflection, max stress, etc.
+                double response = ExtractResponse(workingModel);
+                g = _capacity - response;
+            }
 
             return g;
         }
@@ -134,6 +157,123 @@ namespace Plugin_test_1.Reliability.FORM
         public Func<double[], double> AsLimitStateFunction()
         {
             return EvaluateLimitState;
+        }
+
+        // =====================================================================
+        // PER-ELEMENT LIMIT STATES
+        //
+        // Each element gets its own smooth limit state g_e(x) = (fy or capacity) - sigma_e,
+        // instead of the system-wide min over elements. Running FORM once per element yields
+        // a per-element beta / Pf / alpha. A single FEM solve produces the whole stress field,
+        // so the cost per evaluation is the same as the system limit state.
+        //
+        // Stress is in N/mm^2 = MPa (axial N in newtons, Area in mm^2), matching fy in MPa.
+        // (This deliberately avoids the spurious /1e6 in ExtractMaxStress.)
+        // =====================================================================
+
+        /// <summary>Number of 1D elements in the template model.</summary>
+        public int ElementCount => _templateModel?.Elem1Ds?.Count ?? 0;
+
+        /// <summary>
+        /// Returns a display tag for each element (element Tag, or "Elem[i]" if blank),
+        /// in the same order as the per-element limit-state index.
+        /// </summary>
+        public List<string> GetElementTags()
+        {
+            var tags = new List<string>();
+            if (_templateModel?.Elem1Ds == null) return tags;
+
+            for (int i = 0; i < _templateModel.Elem1Ds.Count; i++)
+            {
+                string tag = _templateModel.Elem1Ds[i]?.Tag;
+                tags.Add(string.IsNullOrWhiteSpace(tag) ? $"Elem[{i}]" : tag);
+            }
+            return tags;
+        }
+
+        /// <summary>
+        /// Evaluates the limit state for a single element:
+        ///   auto (capacity &lt; 0, Stress): g = fy_element - sigma_element
+        ///   manual:                        g = capacity   - sigma_element
+        /// sigma is the maximum over both element ends and all load cases.
+        /// </summary>
+        public double EvaluateLimitStateForElement(double[] x, int elementIndex)
+        {
+            if (x == null)
+                throw new ArgumentNullException(nameof(x));
+
+            TB_Model workingModel = _templateModel.DeepCopy();
+            UpdateModelParameters(workingModel, x);
+            // Re-solve (re-assembles and factorizes K from the updated properties).
+            SolveLS solver = new SolveLS(ref workingModel);
+
+            if (workingModel.Elem1Ds == null ||
+                elementIndex < 0 || elementIndex >= workingModel.Elem1Ds.Count)
+                throw new ArgumentOutOfRangeException(nameof(elementIndex));
+
+            return ComputeElementLimitState(workingModel.Elem1Ds[elementIndex], workingModel);
+        }
+
+        /// <summary>
+        /// Returns the per-element limit state as a delegate for FORMSolver.Solve().
+        /// </summary>
+        public Func<double[], double> AsLimitStateFunctionForElement(int elementIndex)
+        {
+            return x => EvaluateLimitStateForElement(x, elementIndex);
+        }
+
+        /// <summary>
+        /// Computes g for one element (max stress over both ends and all load cases).
+        /// Returns +infinity for an invalid element so it never falsely governs.
+        /// </summary>
+        private double ComputeElementLimitState(TB_Element_1D elem, TB_Model model)
+        {
+            bool auto = _capacity < 0 && _responseType.Equals("Stress", StringComparison.OrdinalIgnoreCase);
+
+            if (elem?.Nodes == null || elem.Nodes.Count < 2 || elem.Sec == null ||
+                (auto && elem.Sec.Mat == null))
+                return double.PositiveInfinity;
+
+            double limit = auto ? elem.Sec.Mat.Fy : _capacity;
+            double maxStress = 0.0;
+
+            for (int lcIndex = 0; lcIndex < (model.Disps?.Count ?? 0); lcIndex++)
+            {
+                try
+                {
+                    var forces = elem.Calc_Forces(lcIndex);
+                    if (forces != null && forces.Length >= 12)
+                    {
+                        double s = ElementStress(elem, forces);
+                        if (s > maxStress) maxStress = s;
+                    }
+                }
+                catch { continue; }
+            }
+
+            return limit - maxStress;
+        }
+
+        /// <summary>
+        /// Combined axial + biaxial bending stress at both ends; returns the larger end.
+        /// sigma = |N/A| + |My/Wy| + |Mz/Wz|, in MPa (N/mm^2).
+        /// </summary>
+        private static double ElementStress(TB_Element_1D elem, double[] forces)
+        {
+            double n_i = forces[0], my_i = forces[4], mz_i = forces[5];
+            double n_j = forces[6], my_j = forces[10], mz_j = forces[11];
+
+            double area = elem.Sec.Area, wy = elem.Sec.Wy, wz = elem.Sec.Wz;
+
+            double stress_i = (area > 0 ? Math.Abs(n_i / area) : 0) +
+                              (wy > 0 ? Math.Abs(my_i / wy) : 0) +
+                              (wz > 0 ? Math.Abs(mz_i / wz) : 0);
+
+            double stress_j = (area > 0 ? Math.Abs(n_j / area) : 0) +
+                              (wy > 0 ? Math.Abs(my_j / wy) : 0) +
+                              (wz > 0 ? Math.Abs(mz_j / wz) : 0);
+
+            return Math.Max(stress_i, stress_j);
         }
 
         /// <summary>
@@ -193,6 +333,9 @@ namespace Plugin_test_1.Reliability.FORM
 
                 TB_Material oldMat = elem.Sec.Mat;
                 TB_Material newMat = null;
+
+                if (paramName.ToLower() == "e" && value > 1e6)
+                    throw new ArgumentException($"E={value} looks like Pa, not MPa. Divide by 1e6.");
 
                 switch (paramName.ToLower())
                 {
@@ -286,19 +429,37 @@ namespace Plugin_test_1.Reliability.FORM
 
                     case "iy":
                     case "moment_of_inertia_y":
-                        newSec = new Section_Custom(oldSec.Mat, oldSec.Tag, oldSec.Area, value, oldSec.Iz, oldSec.J, oldSec.Wy, oldSec.Wz);
+                        // System.Diagnostics.Debug.WriteLine($"[DIAG-iy] Hit! value={value}, oldSec.Iy={oldSec.Iy}, oldSec.Wy={oldSec.Wy}");
+                        double new_wy = oldSec.Wy * (value) / oldSec.Iy;    // scale Wy proportionally: Wy_new = Wy_old * (Iy_new / Iy_old)
+                        // System.Diagnostics.Debug.WriteLine($"[DIAG-iy] new_wy = {new_wy}, newSec.Iy will be = {value}");
+                        newSec = new Section_Custom(oldSec.Mat, oldSec.Tag, oldSec.Area,
+                                                    value, oldSec.Iz, oldSec.J,
+                                                    new_wy, oldSec.Wz);
                         found = true;
                         break;
 
                     case "iz":
                     case "moment_of_inertia_z":
-                        newSec = new Section_Custom(oldSec.Mat, oldSec.Tag, oldSec.Area, oldSec.Iy, value, oldSec.J, oldSec.Wy, oldSec.Wz);
+                        double new_wz = oldSec.Wz * (value) / oldSec.Iz;  // scale Wz proportionally: Wz_new = Wz_old * (Iz_new / Iz_old)
+                        newSec = new Section_Custom(oldSec.Mat, oldSec.Tag, oldSec.Area, oldSec.Iy
+                                                    ,value, oldSec.J,
+                                                    oldSec.Wy,new_wz );
                         found = true;
                         break;
 
                     case "j":
                     case "torsional_constant":
                         newSec = new Section_Custom(oldSec.Mat, oldSec.Tag, oldSec.Area, oldSec.Iy, oldSec.Iz, value, oldSec.Wy, oldSec.Wz);
+                        found = true;
+                        break;
+
+                    case "wy":
+                        newSec = new Section_Custom(oldSec.Mat, oldSec.Tag, oldSec.Area, oldSec.Iy, oldSec.Iz, oldSec.J, value, oldSec.Wz);
+                        found = true;
+                        break;
+
+                    case "wz":
+                        newSec = new Section_Custom(oldSec.Mat, oldSec.Tag, oldSec.Area, oldSec.Iy, oldSec.Iz, oldSec.J, oldSec.Wy, value);
                         found = true;
                         break;
                 }
@@ -319,6 +480,9 @@ namespace Plugin_test_1.Reliability.FORM
         /// Attempts to update a load property in the model's load list.
         /// Supports patterns like "Load_0_Y" (load at index 0, Y component).
         /// Returns true if the property was found and updated, false otherwise.
+        /// 
+        /// IMPORTANT: Creates a new TB_Load_Point with updated load values to avoid
+        /// mutating the shared load list in the template model.
         /// </summary>
         private bool UpdateLoadProperty(TB_Model model, string paramName, double value)
         {
@@ -337,12 +501,25 @@ namespace Plugin_test_1.Reliability.FORM
                     if (loadIndex >= 0 && loadIndex < model.Loads.Count)
                     {
                         var load = model.Loads[loadIndex];
-                        if (load is TB_Load_Point pointLoad && pointLoad.Loads.Count >= 6)
+                        if (load is TB_Load_Point oldPointLoad && oldPointLoad.Loads.Count >= 6)
                         {
                             int componentIndex = ComponentNameToIndex(component);
                             if (componentIndex >= 0 && componentIndex < 6)
                             {
-                                pointLoad.Loads[componentIndex] = value;
+                                // Create a new point load with updated load component
+                                // (avoiding mutation of the original shared load list)
+                                // Convert user inputs (kN, kNm) to Base SI (N, Nm) for accurate stiffness integration
+                                var newLoads = new List<double>(oldPointLoad.Loads);
+                                newLoads[componentIndex] = value * 1000.0;
+
+                                var newPointLoad = new TB_Load_Point(
+                                    oldPointLoad.Pt,
+                                    new Rhino.Geometry.Vector3d(newLoads[0], newLoads[1], newLoads[2]),
+                                    new Rhino.Geometry.Vector3d(newLoads[3], newLoads[4], newLoads[5]),
+                                    oldPointLoad.Lc ?? 0);
+                                newPointLoad.Node = oldPointLoad.Node;
+
+                                model.Loads[loadIndex] = newPointLoad;
                                 return true;
                             }
                         }
@@ -422,7 +599,7 @@ namespace Plugin_test_1.Reliability.FORM
                 }
             }
 
-            return maxDisp;
+            return maxDisp * 1000.0; // Return mm
         }
 
         /// <summary>
@@ -437,54 +614,109 @@ namespace Plugin_test_1.Reliability.FORM
             if (model?.Elem1Ds == null || model.Elem1Ds.Count == 0)
                 return maxStress;
 
-            // Iterate over all elements and load cases
             foreach (var elem in model.Elem1Ds)
             {
-                if (elem?.Nodes == null || elem.Nodes.Count < 2 || elem.Sec == null)
-                    continue;
+                if (elem?.Nodes == null || elem.Nodes.Count < 2 || elem.Sec == null) continue;
 
-                // Get element forces for each load case
                 for (int lcIndex = 0; lcIndex < (model.Disps?.Count ?? 0); lcIndex++)
                 {
-                    // VERIFIED: elem.Calc_Forces(lcIndex) returns 12-element force/moment array
-                    // Indices: [Fx_i, Fy_i, Fz_i, Mx_i, My_i, Mz_i, Fx_j, Fy_j, Fz_j, Mx_j, My_j, Mz_j]
-                    // See: ST_Element_1D.Calc_Forces() uses 12x1 force vector from element equilibrium.
                     try
                     {
                         var forces = elem.Calc_Forces(lcIndex);
-
                         if (forces != null && forces.Length >= 12)
                         {
-                            // Extract bending moments (My and Mz at both ends)
-                            double my_i = Math.Abs(forces[4]);
-                            double mz_i = Math.Abs(forces[5]);
-                            double my_j = Math.Abs(forces[10]);
-                            double mz_j = Math.Abs(forces[11]);
+       
+                            double n_i = forces[0];
+                            double my_i = forces[4];
+                            double mz_i = forces[5];
 
-                            // Compute bending stress: σ = M / W
-                            double stress_y_i = elem.Sec.Wy > 0 ? my_i / elem.Sec.Wy : 0;
-                            double stress_z_i = elem.Sec.Wz > 0 ? mz_i / elem.Sec.Wz : 0;
-                            double stress_y_j = elem.Sec.Wy > 0 ? my_j / elem.Sec.Wy : 0;
-                            double stress_z_j = elem.Sec.Wz > 0 ? mz_j / elem.Sec.Wz : 0;
+                            double n_j = forces[6];
+                            double my_j = forces[10];
+                            double mz_j = forces[11];
 
-                            // Combined bending stress (simplified)
-                            double localMax = Math.Max(
-                                Math.Max(stress_y_i, stress_z_i),
-                                Math.Max(stress_y_j, stress_z_j));
+                            double area = elem.Sec.Area;
+                            double wy = elem.Sec.Wy;
+                            double wz = elem.Sec.Wz;
 
-                            if (localMax > maxStress)
-                                maxStress = localMax;
+                            double stress_i = (area > 0 ? Math.Abs(n_i / area) : 0) + 
+                                              (wy > 0 ? Math.Abs(my_i / wy) : 0) + 
+                                              (wz > 0 ? Math.Abs(mz_i / wz) : 0);
+
+                            double stress_j = (area > 0 ? Math.Abs(n_j / area) : 0) + 
+                                              (wy > 0 ? Math.Abs(my_j / wy) : 0) + 
+                                              (wz > 0 ? Math.Abs(mz_j / wz) : 0);
+
+                            double localMax = Math.Max(stress_i, stress_j);
+
+                            if (localMax > maxStress) maxStress = localMax;
                         }
                     }
-                    catch
-                    {
-                        // If forces cannot be computed for this load case, skip
-                        continue;
-                    }
+                    catch { continue; }
                 }
             }
 
-            return maxStress;
+            return maxStress / 1e6; // Return MPa
+        }
+
+        /// <summary>
+        /// Evaluates the most critical element where g = (Fy - local stress).
+        /// Looks directly at the material yield strength (Fy) to evaluate capacity.
+        /// Returns the absolute minimum limit state value across the structure.
+        /// </summary>
+        private double ExtractAutoStressLimitState(TB_Model model)
+        {
+            double min_g = double.MaxValue;
+
+            if (model?.Elem1Ds == null || model.Elem1Ds.Count == 0)
+                return min_g;
+
+            foreach (var elem in model.Elem1Ds)
+            {
+                if (elem?.Nodes == null || elem.Nodes.Count < 2 || elem.Sec?.Mat == null) continue;
+
+                double fy = elem.Sec.Mat.Fy;
+
+                for (int lcIndex = 0; lcIndex < (model.Disps?.Count ?? 0); lcIndex++)
+                {
+                    try
+                    {
+                        var forces = elem.Calc_Forces(lcIndex);
+                        if (forces != null && forces.Length >= 12)
+                        {
+                            double n_i = forces[0];
+                            double my_i = forces[4];
+                            double mz_i = forces[5];
+
+                            double n_j = forces[6];
+                            double my_j = forces[10];
+                            double mz_j = forces[11];
+
+                            double area = elem.Sec.Area;
+                            double wy = elem.Sec.Wy;
+                            double wz = elem.Sec.Wz;
+
+                            double stress_i = (area > 0 ? Math.Abs(n_i / area) : 0) + 
+                                              (wy > 0 ? Math.Abs(my_i / wy) : 0) + 
+                                              (wz > 0 ? Math.Abs(mz_i / wz) : 0);
+
+                            double stress_j = (area > 0 ? Math.Abs(n_j / area) : 0) + 
+                                              (wy > 0 ? Math.Abs(my_j / wy) : 0) + 
+                                              (wz > 0 ? Math.Abs(mz_j / wz) : 0);
+
+                            double localMaxStress = Math.Max(stress_i, stress_j);
+
+                            // Map local gap gradient back to user expected MPa scaling
+                            System.Diagnostics.Debug.WriteLine($"[DIAG-LSF] elem={elem.Sec.Tag}, fy={fy}, my_i={my_i}, my_j={my_j}, wy={wy}, stress_i={stress_i}, stress_j={stress_j}, localMax={localMaxStress}, local_g={(fy - localMaxStress)}");
+                            double local_g = fy - localMaxStress;
+
+                            if (local_g < min_g) min_g = local_g;
+                        }
+                    }
+                    catch { continue; }
+                }
+            }
+
+            return min_g;
         }
     }
 }

@@ -1,11 +1,12 @@
-using System;
-using System.Collections.Generic;
 using Grasshopper.Kernel;
+using MathNet.Numerics.Distributions;
 using Plugin_test_1.Reliability;
+using Plugin_test_1.Reliability.FORM;
 using Propability_NTNU_v1;
 using Propability_NTNU_v1.Classes.Toolbox;
 using Rhino.Geometry;
-using MathNet.Numerics.Distributions;
+using System;
+using System.Collections.Generic;
 
 namespace Plugin_test_1.Reliability.Reliability_TryOuts
 {
@@ -38,7 +39,7 @@ namespace Plugin_test_1.Reliability.Reliability_TryOuts
         // =====================================================================
         protected override void RegisterInputParams(GH_InputParamManager pManager)
         {
-            pManager.AddParameter(new Param_Element1D(), "Beam", "Beam", "Beam element", GH_ParamAccess.item);
+            pManager.AddParameter(new Param_Element1D(), "Elements", "Beam", "Beam element", GH_ParamAccess.item);
             pManager.AddParameter(new Param_Load(), "Loads", "Loads", "Point and distributed loads", GH_ParamAccess.list);
             pManager.AddParameter(new Param_Support(), "Supports", "Sup", "Support conditions", GH_ParamAccess.list);
             pManager.AddNumberParameter("W_el", "Wel", "Elastic section modulus [mm³]", GH_ParamAccess.item);
@@ -162,7 +163,11 @@ namespace Plugin_test_1.Reliability.Reliability_TryOuts
             a = Math.Max(0.001 * L, Math.Min(0.999 * L, a));
 
             // ── build random variables ────────────────────────────────────────
-            var rvs = RandomVariable.BuildEurocodeRVs(fyk, Gk, Qk);
+            //var rvs = RandomVariable.BuildEurocodeRVs(fyk, Gk, Qk);
+            // Construct RVs explicitly to match the FEM-FORM setup
+            var rvs = new RandomVariable[2];
+            rvs[0] = new RandomVariable("fy", fyk, 0.01, 0.05, "lognormal");
+            rvs[1] = new RandomVariable("Q", Qk, 0.98, 0.26, "gumbel");
 
             // ── Monte Carlo Simulation ────────────────────────────────────────
             int N_int = (int)N;

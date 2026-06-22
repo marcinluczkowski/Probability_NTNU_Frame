@@ -88,19 +88,43 @@ namespace Plugin_test_1.Reliability.FORM
         /// </summary>
         public void ComputeEquivalentNormal(double x)
         {
-            double fx = PDF(x);
-            if (Math.Abs(fx) < 1e-16)
+            if (Distribution == DistributionType.Normal)
             {
-                throw new InvalidOperationException(
-                    $"Cannot compute Rackwitz-Fiessler at {Name}={x}: PDF is zero or invalid.");
+                EquivNormalMean = Mean;
+                EquivNormalStdDev = StdDev;
             }
+            else if (Distribution == DistributionType.LogNormal)
+            {
+                if (x <= 0) x = 1e-12; // Guard singularity
+                double lambda = Math.Log(Mean / Math.Sqrt(1.0 + Math.Pow(StdDev / Mean, 2)));
+                double zeta = Math.Sqrt(Math.Log(1.0 + Math.Pow(StdDev / Mean, 2)));
 
-            double Fx = CDF(x);
-            double u_x = Normal.InvCDF(0, 1, Fx);
-            double phi_u = Normal.PDF(0, 1, u_x);
+                double u_x = (Math.Log(x) - lambda) / zeta;
 
-            EquivNormalStdDev = phi_u / fx;
-            EquivNormalMean = x - u_x * EquivNormalStdDev;
+                // Analytically perfectly exact transformation preventing tail-explosion
+                EquivNormalStdDev = x * zeta;
+                EquivNormalMean = x - u_x * EquivNormalStdDev;
+            }
+            else if (Distribution == DistributionType.Gumbel)
+            {
+                double u_n = Mean - 0.5772 * StdDev * Math.Sqrt(6) / Math.PI;
+                double alpha_n = StdDev * Math.Sqrt(6) / Math.PI;
+
+                double y = (x - u_n) / alpha_n;
+                double Fx = Math.Exp(-Math.Exp(-y));
+
+                // Guard Fx extremes to ensure mapping remains bounded
+                Fx = Math.Max(1e-15, Math.Min(1.0 - 1e-15, Fx));
+
+                double fx = (1.0 / alpha_n) * Math.Exp(-y) * Fx;
+                fx = Math.Max(fx, 1e-100);
+
+                double u_x = Normal.InvCDF(0, 1, Fx);
+                double phi_u = Normal.PDF(0, 1, u_x);
+
+                EquivNormalStdDev = phi_u / fx;
+                EquivNormalMean = x - u_x * EquivNormalStdDev;
+            }
         }
 
         /// <summary>
@@ -143,11 +167,26 @@ namespace Plugin_test_1.Reliability.FORM
         /// </summary>
         private double PDF(double x)
         {
-            // Use central finite difference: f(x) ≈ (F(x+h) - F(x-h)) / (2h)
-            // Step size chosen to balance truncation and rounding error
-            double h = Math.Max(Math.Abs(x) * 1e-6, 1e-10);
-            double pdf = (CDF(x + h) - CDF(x - h)) / (2.0 * h);
-            return Math.Max(pdf, 1e-16);  // Guard against negative PDF
+            switch (Distribution)
+            {
+                case DistributionType.Normal:
+                    return Math.Max(Normal.PDF(Mean, StdDev, x), 1e-16);
+
+                case DistributionType.LogNormal:
+                    if (x <= 0) return 1e-16;
+                    double lambda = Math.Log(Mean / Math.Sqrt(1.0 + Math.Pow(StdDev / Mean, 2)));
+                    double zeta = Math.Sqrt(Math.Log(1.0 + Math.Pow(StdDev / Mean, 2)));
+                    double logNormalPdf = Normal.PDF(0, 1, (Math.Log(x) - lambda) / zeta) / (x * zeta);
+                    return Math.Max(logNormalPdf, 1e-16);
+
+                case DistributionType.Gumbel:
+                default:
+                    // Use central finite difference: f(x) ≈ (F(x+h) - F(x-h)) / (2h)
+                    // Step size chosen to balance truncation and rounding error
+                    double h = Math.Max(Math.Abs(x) * 1e-6, 1e-10);
+                    double pdf = (CDF(x + h) - CDF(x - h)) / (2.0 * h);
+                    return Math.Max(pdf, 1e-16);  // Guard against negative PDF
+            }
         }
 
         /// <summary>
