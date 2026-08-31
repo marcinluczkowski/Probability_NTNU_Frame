@@ -5,7 +5,7 @@ using Grasshopper.Kernel;
 using Rhino.Geometry;
 using System.Linq;
 
-namespace Plugin_test_1.Reliability
+namespace Plugin_test_1.Reliability.MonteCralo
 {
     public class MonteCarloSim : GH_Component
     {
@@ -58,7 +58,7 @@ namespace Plugin_test_1.Reliability
             DA.GetData(2, ref Qk);
 
             // Build random variables using Eurocode calibration
-            var rvs = RandomVariable.BuildEurocodeRVs(fyk, Gk, Qk);
+            var rvs = StochasticVariable.BuildEurocodeRVs(fyk, Gk, Qk);
 
             double Wel = 200000.0, L = 5.0, a = L / 2.0;
             double seedDouble = 42, NDouble = 100000;
@@ -83,7 +83,7 @@ namespace Plugin_test_1.Reliability
                 bool converged;
 
                 // Use the FORM analysis from Reliability_TryOuts namespace
-                Reliability_TryOuts.FORM.Run(Wel, L, a, rvs.Cast<RandomVariable>().ToArray(), out beta_FORM, out converged);
+                Reliability_TryOuts.FORM.Run(Wel, L, a, rvs.Cast<StochasticVariable>().ToArray(), out beta_FORM, out converged);
 
                 // Approximate design point for importance sampling (this is a very crude approximation - ideally should be the actual design point from FORM)
                 double[] designPoint = rvs.Select(rv => rv.Mean).ToArray();

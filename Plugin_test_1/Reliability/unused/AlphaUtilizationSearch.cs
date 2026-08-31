@@ -5,7 +5,7 @@ using Propability_NTNU_v1;
 using Propability_NTNU_v1.Classes.Toolbox;
 using Rhino.Geometry;
 
-namespace Plugin_test_1.Reliability
+namespace Plugin_test_1.Reliability.unused
 {
     public class AlphaUtilizationSearch : GH_Component
     {
@@ -118,14 +118,14 @@ namespace Plugin_test_1.Reliability
                 if (!knownLoadType)
                     AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "Unknown load type in stochastic catalog. Using default load COV/percentile.");
 
-                var resistanceRv = new RandomVariable(
+                var resistanceRv = new StochasticVariable(
                     string.IsNullOrWhiteSpace(material) ? "material" : material,
                     rk,
                     materialInput.Percentile,
                     materialInput.COV,
                     materialInput.DistributionType);
 
-                var loadRv = new RandomVariable(
+                var loadRv = new StochasticVariable(
                     string.IsNullOrWhiteSpace(loadType) ? "load" : loadType,
                     sk,
                     loadInput.Percentile,

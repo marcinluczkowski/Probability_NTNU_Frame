@@ -11,7 +11,7 @@ namespace Plugin_test_1.Reliability.Reliability_TryOuts
     public class FORMDiagnostics
     {
         public static void DiagnoseConvergence(double W_el, double L, double a, 
-                                              RandomVariable[] rvs, 
+                                              StochasticVariable[] rvs, 
                                               double targetUtilization)
         {
             // This is what your FORM.cs is computing
@@ -69,7 +69,7 @@ namespace Plugin_test_1.Reliability.Reliability_TryOuts
         /// Useful for understanding why beta behaves unexpectedly
         /// </summary>
         public static void TraceHLRFIterations(double W_el, double L, double a,
-                                               RandomVariable[] rvs)
+                                               StochasticVariable[] rvs)
         {
             Console.WriteLine($"\n=== HLRF Iteration Trace ===");
             Console.WriteLine($"Section: W_el={W_el:F0} mm³, Span={L:F2}m, a={a:F2}m");

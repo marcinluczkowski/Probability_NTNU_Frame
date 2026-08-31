@@ -27,7 +27,12 @@ namespace Propability_NTNU_v1.Classes.Toolbox
 
         public TB_Section() { }
 
-        public TB_Section DeepCopy() => (TB_Section)MemberwiseClone();
+        public TB_Section DeepCopy()
+        {
+            var copy = (TB_Section)MemberwiseClone();
+            copy.Mat = Mat?.DeepCopy();
+            return copy;
+        }
 
         public virtual string GetDims() => "";
         public override string ToString() => $"Cross-Section, {Type}, {Tag}, {Mat?.Tag}";

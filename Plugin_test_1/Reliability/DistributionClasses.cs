@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 
 namespace Plugin_test_1.Reliability
 {
-    public class RandomVariable
+    public class StochasticVariable
     {
         public const double Euler_Gamma = 0.5772156649;
         public readonly Random _random = new Random();
@@ -29,7 +29,7 @@ namespace Plugin_test_1.Reliability
 
         public int ReferenceperiodYears = 50;   // T-years
 
-        public RandomVariable(string name, double charValue, double percentile, double cov, string distType, double mean = double.NaN)
+        public StochasticVariable(string name, double charValue, double percentile, double cov, string distType, double mean = double.NaN)
         {
             Name = name;
             CharValue = charValue;
@@ -267,24 +267,24 @@ namespace Plugin_test_1.Reliability
         /// Returns:
         ///   Array of 5 RandomVariables: [fy, G, Q, theta_R, theta_E]
         /// </summary>
-        public static RandomVariable[] BuildEurocodeRVs(double fyk, double Gk, double Qk)
+        public static StochasticVariable[] BuildEurocodeRVs(double fyk, double Gk, double Qk)
         {
             return new[]
             {
                 // Material: lognormal, 5% COV
-                new RandomVariable("fy", fyk, 0.01, 0.05, "lognormal"),
+                new StochasticVariable("fy", fyk, 0.01, 0.05, "lognormal"),
 
                 // Permanent load: normal, 10% COV
-                new RandomVariable("G", Gk, 0.50, 0.10, "normal"),
+                new StochasticVariable("G", Gk, 0.50, 0.10, "normal"),
 
                 // Variable load: gumbel, 26% COV, 98th percentile
-                new RandomVariable("Q", Qk, 0.98, 0.26, "gumbel"),
+                new StochasticVariable("Q", Qk, 0.98, 0.26, "gumbel"),
 
                 // Resistance model uncertainty: lognormal, 5% COV (mean-based)
-                new RandomVariable("theta_R", 1.15, 0.05, 0.05, "lognormal", 1.15),
+                new StochasticVariable("theta_R", 1.15, 0.05, 0.05, "lognormal", 1.15),
 
                 // Execution model uncertainty: lognormal, 10% COV (mean-based)
-                new RandomVariable("theta_E", 1.00, 0.50, 0.10, "lognormal", 1.00),
+                new StochasticVariable("theta_E", 1.00, 0.50, 0.10, "lognormal", 1.00),
             };
         }
     }

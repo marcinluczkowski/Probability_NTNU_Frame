@@ -180,9 +180,9 @@ namespace Plugin_test_1.Reliability.Reliability_TryOuts
 
             // ── build random variables ────────────────────────────────────────
             //var rvs = RandomVariable.BuildEurocodeRVs(fyk, Gk, Qk);
-            var rvs = new RandomVariable[2];
-            rvs[0] = new RandomVariable("fy", fyk, 0.01, 0.05, "lognormal");
-            rvs[1] = new RandomVariable("Q", Qk, 0.98, 0.26, "gumbel");
+            var rvs = new StochasticVariable[2];
+            rvs[0] = new StochasticVariable("fy", fyk, 0.01, 0.05, "lognormal");
+            rvs[1] = new StochasticVariable("Q", Qk, 0.98, 0.26, "gumbel");
 
             // ── FORM ──────────────────────────────────────────────────────────
             double beta;

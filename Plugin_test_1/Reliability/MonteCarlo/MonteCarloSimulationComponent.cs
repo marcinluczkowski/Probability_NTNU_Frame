@@ -1,14 +1,14 @@
 using Grasshopper.Kernel;
 using MathNet.Numerics.Distributions;
-using Plugin_test_1.Reliability;
 using Plugin_test_1.Reliability.FORM;
+using Plugin_test_1.Reliability.MonteCralo;
 using Propability_NTNU_v1;
 using Propability_NTNU_v1.Classes.Toolbox;
 using Rhino.Geometry;
 using System;
 using System.Collections.Generic;
 
-namespace Plugin_test_1.Reliability.Reliability_TryOuts
+namespace Plugin_test_1.Reliability.MonteCarlo
 {
     /// <summary>
     /// Monte Carlo Simulation Component
@@ -165,9 +165,9 @@ namespace Plugin_test_1.Reliability.Reliability_TryOuts
             // ── build random variables ────────────────────────────────────────
             //var rvs = RandomVariable.BuildEurocodeRVs(fyk, Gk, Qk);
             // Construct RVs explicitly to match the FEM-FORM setup
-            var rvs = new RandomVariable[2];
-            rvs[0] = new RandomVariable("fy", fyk, 0.01, 0.05, "lognormal");
-            rvs[1] = new RandomVariable("Q", Qk, 0.98, 0.26, "gumbel");
+            var rvs = new StochasticVariable[2];
+            rvs[0] = new StochasticVariable("fy", fyk, 0.01, 0.05, "lognormal");
+            rvs[1] = new StochasticVariable("Q", Qk, 0.98, 0.26, "gumbel");
 
             // ── Monte Carlo Simulation ────────────────────────────────────────
             int N_int = (int)N;

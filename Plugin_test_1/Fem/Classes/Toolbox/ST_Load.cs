@@ -22,7 +22,7 @@ namespace Propability_NTNU_v1.Classes.Toolbox
 
         // --- methods ---
 
-        public TB_Load DeepCopy()
+        public virtual TB_Load DeepCopy()
         {
             return (TB_Load)base.MemberwiseClone();
         }
@@ -44,7 +44,7 @@ namespace Propability_NTNU_v1.Classes.Toolbox
     {
         // --- field ---
         public Point3d Pt { get; private set; }
-        public List<double> Loads { get; } = new List<double>();
+        public List<double> Loads { get; private set; } = new List<double>();
         public Node Node { get; set; } = null;
 
         // --- constructors --- 
@@ -68,6 +68,12 @@ namespace Propability_NTNU_v1.Classes.Toolbox
         }
 
         // --- methods ---
+        public override TB_Load DeepCopy()
+        {
+            var c = (TB_Load_Point)base.DeepCopy();
+            c.Loads = new List<double>(this.Loads);   // was aliased by MemberwiseClone (line 25)
+            return c;
+        }
         public override string LoadType()
         {
             return "Point Load";

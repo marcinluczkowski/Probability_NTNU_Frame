@@ -8,7 +8,7 @@ using System.Text;
 // The statistics live in Plugin_test_1.Reliability.RandomVariable (DistributionClasses.cs),
 // which already converts characteristic value + fractile + COV + distribution into mean/stddev.
 // That class name collides with Plugin_test_1.Reliability.FORM.RandomVariable, so we alias it.
-using StatRV = Plugin_test_1.Reliability.RandomVariable;
+using StatRV = Plugin_test_1.Reliability.StochasticVariable;
 
 namespace Plugin_test_1.Reliability.FORM
 {

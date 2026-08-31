@@ -510,7 +510,7 @@ namespace Plugin_test_1.Reliability.FORM
                                 // (avoiding mutation of the original shared load list)
                                 // Convert user inputs (kN, kNm) to Base SI (N, Nm) for accurate stiffness integration
                                 var newLoads = new List<double>(oldPointLoad.Loads);
-                                newLoads[componentIndex] = value * 1000.0;
+                                newLoads[componentIndex] = value * 1000.0; //kN -> N
 
                                 var newPointLoad = new TB_Load_Point(
                                     oldPointLoad.Pt,

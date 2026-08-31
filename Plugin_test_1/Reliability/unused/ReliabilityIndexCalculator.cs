@@ -7,7 +7,7 @@ using Propability_NTNU_v1.Classes.Toolbox;
 using Rhino.Geometry;
 using MathNet.Numerics.Distributions;
 
-namespace Plugin_test_1.Fem.Components
+namespace Plugin_test_1.Reliability.unused
 {
     public class ReliabilityIndexCalculator : GH_Component
     {
@@ -82,14 +82,14 @@ namespace Plugin_test_1.Fem.Components
                 if (!knownLoadType)
                     AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "Unknown load type in stochastic catalog. Using default load COV/percentile.");
 
-                var resistanceRv = new RandomVariable(
+                var resistanceRv = new StochasticVariable(
                     string.IsNullOrWhiteSpace(material) ? "material" : material,
                     rk,
                     materialInput.Percentile,
                     materialInput.COV,
                     materialInput.DistributionType);
 
-                var loadRv = new RandomVariable(
+                var loadRv = new StochasticVariable(
                     string.IsNullOrWhiteSpace(loadType) ? "load" : loadType,
                     sk,
                     loadInput.Percentile,
@@ -162,7 +162,7 @@ namespace Plugin_test_1.Fem.Components
             }
         }
 
-        private double CalculateFORM(RandomVariable R, RandomVariable S, double loadMultiplier, out double pf, out double alphaR, out double alphaS)
+        private double CalculateFORM(StochasticVariable R, StochasticVariable S, double loadMultiplier, out double pf, out double alphaR, out double alphaS)
         {
             // First Order Reliability Method (FORM)
             // Limit state function G(R, S) = R - c*S = 0
@@ -237,13 +237,13 @@ namespace Plugin_test_1.Fem.Components
         /// Extended FORM with model uncertainties (theta_R, theta_E).
         /// Limit state: G = theta_R * R - theta_E * c * S
         /// </summary>
-        private double CalculateFORMWithModelUncertainties(RandomVariable R, RandomVariable S, double loadMultiplier,
+        private double CalculateFORMWithModelUncertainties(StochasticVariable R, StochasticVariable S, double loadMultiplier,
                                                            out double pf, out double alphaR, out double alphaS,
                                                            out double alphaThR, out double alphaThE)
         {
             // Model uncertainties (Eurocode calibrated)
-            var thetaR = new RandomVariable("theta_R", 1.15, 0.05, 0.05, "lognormal", 1.15);  // Resistance model uncertainty
-            var thetaE = new RandomVariable("theta_E", 1.00, 0.50, 0.10, "lognormal", 1.00);  // Execution model uncertainty
+            var thetaR = new StochasticVariable("theta_R", 1.15, 0.05, 0.05, "lognormal", 1.15);  // Resistance model uncertainty
+            var thetaE = new StochasticVariable("theta_E", 1.00, 0.50, 0.10, "lognormal", 1.00);  // Execution model uncertainty
 
             // Transform to Standard Normal Space — init with mean values
             double uR = Normal.InvCDF(0, 1, R.CDF(R.Mean));

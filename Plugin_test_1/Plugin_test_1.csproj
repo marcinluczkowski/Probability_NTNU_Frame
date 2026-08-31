@@ -24,6 +24,18 @@
   </PropertyGroup>
   
   <ItemGroup>
+    <Compile Remove="Reliability\MonteCarlo\**" />
+    <Compile Remove="Reliability\Reliability_TryOuts\**" />
+    <Compile Remove="Reliability\unused\**" />
+    <EmbeddedResource Remove="Reliability\MonteCarlo\**" />
+    <EmbeddedResource Remove="Reliability\Reliability_TryOuts\**" />
+    <EmbeddedResource Remove="Reliability\unused\**" />
+    <None Remove="Reliability\MonteCarlo\**" />
+    <None Remove="Reliability\Reliability_TryOuts\**" />
+    <None Remove="Reliability\unused\**" />
+  </ItemGroup>
+  
+  <ItemGroup>
     <PackageReference Include="CSparse" Version="4.3.0" />
     <PackageReference Include="Grasshopper" Version="8.0.23304.9001" ExcludeAssets="runtime" />
     <PackageReference Include="MathNet.Numerics" Version="5.0.0" />

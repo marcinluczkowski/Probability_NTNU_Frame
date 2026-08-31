@@ -26,7 +26,7 @@ namespace Plugin_test_1.Reliability.Reliability_TryOuts
         }
 
         // ── Limit state in standard-normal space ──────────────────────────────
-        private static double G_u(double[] u, RandomVariable[] rvs, double W_el, double L, double a)
+        private static double G_u(double[] u, StochasticVariable[] rvs, double W_el, double L, double a)
         {
             double[] x = new double[2];
             for (int i = 0; i < 2; i++) x[i] = rvs[i].UtoX(u[i]);
@@ -35,7 +35,7 @@ namespace Plugin_test_1.Reliability.Reliability_TryOuts
 
         // ── Analytic gradient in u-space ──────────────────────────────────────
         // dg/du_i = (dg/dx_i) * (dx_i/du_i)   where dx/du = phi(u)/f(x)
-        private static double[] GradU(double[] u, RandomVariable[] rvs, double W_el, double L, double a)
+        private static double[] GradU(double[] u, StochasticVariable[] rvs, double W_el, double L, double a)
         {
             int n = rvs.Length;
 
@@ -81,7 +81,7 @@ namespace Plugin_test_1.Reliability.Reliability_TryOuts
         /// beta is still a numerically valid estimate.
         /// </summary>
         public static double Run(double W_el, double L, double a,
-                                 RandomVariable[] rvs,
+                                 StochasticVariable[] rvs,
                                  out double beta, out bool converged, out double[] alpha)
         {
             int n = rvs.Length;
@@ -148,7 +148,7 @@ namespace Plugin_test_1.Reliability.Reliability_TryOuts
 
         // Backwards-compatible overload: original signature without alpha
         public static double Run(double W_el, double L, double a,
-                                 RandomVariable[] rvs,
+                                 StochasticVariable[] rvs,
                                  out double beta, out bool converged)
         {
             double[] alpha;

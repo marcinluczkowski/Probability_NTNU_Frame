@@ -4,7 +4,7 @@ using System.Linq;
 using MathNet.Numerics.Distributions;
 using Plugin_test_1.Reliability.Reliability_TryOuts;
 
-namespace Plugin_test_1.Reliability
+namespace Plugin_test_1.Reliability.MonteCralo
 {
     /// <summary>
     /// Monte Carlo simulation engine with support for crude MC and importance sampling.
@@ -31,7 +31,7 @@ namespace Plugin_test_1.Reliability
         ///   samples : 2D array of shape (rvs.Count, N)
         ///           Row i contains N samples of rvs[i]
         /// </summary>
-        public static double[,] SampleRandomVariables(RandomVariable[] rvs, int N, int seed = MCS_SEED)
+        public static double[,] SampleRandomVariables(StochasticVariable[] rvs, int N, int seed = MCS_SEED)
         {
             Random rng = new Random(seed);
             int n_rv = rvs.Length;
@@ -104,7 +104,7 @@ namespace Plugin_test_1.Reliability
         /// </summary>
         public static Dictionary<string, object> RunCrudeMonteCarlo(
             double W_mm3, double L_m, double a,
-            RandomVariable[] rvs,
+            StochasticVariable[] rvs,
             int N = -1, int seed = MCS_SEED)
         {
             if (N <= 0) N = MCS_DEFAULT_N;
@@ -182,7 +182,7 @@ namespace Plugin_test_1.Reliability
         /// </summary>
         public static Dictionary<string, object> RunImportanceSampling(
             double W_mm3, double L_m, double a,
-            RandomVariable[] rvs,
+            StochasticVariable[] rvs,
             double[] designPoint,
             double stdShift = 1.0,
             int N = -1, int seed = MCS_SEED)
