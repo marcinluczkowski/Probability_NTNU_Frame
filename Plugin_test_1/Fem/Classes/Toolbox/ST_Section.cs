@@ -1,3 +1,19 @@
+// =============================================================================
+//  ST_Section.cs
+//
+//  WHAT IT IS
+//  The cross-section data classes (TB_Section and its types) plus the Grasshopper
+//  wrapper and parameter. Unchanged from the existing file EXCEPT for the new
+//  Section_I class (marked "NEW" below).
+//
+//  WHY IT MATTERS
+//  TB_Section is what every element carries into the FE solve and into the limit
+//  states: Area and Iy/Iz set the stiffness and the member forces, and together
+//  with Fy they set the resistance. Section_I adds what the Eurocode member checks
+//  need and the other section types do not have: radii of gyration and the
+//  buckling-curve imperfection factors (alpha) of the profile.
+// =============================================================================
+
 using System;
 using System.Collections.Generic;
 using Rhino.Geometry;
@@ -86,6 +102,66 @@ namespace Propability_NTNU_v1.Classes.Toolbox
             return crvs;
         }
         public override string GetDims() => $"{Type}, H={H}, W={W}, tw={Tw}, tf={Tf}";
+    }
+
+    /// <summary>
+    /// NEW. Rolled I/H section with TABULATED properties (root fillets included) — used by HEA Catalog.
+    /// Properties are taken from the table, not computed from the dimensions, so they
+    /// match Karamba3D. Units: [mm], [mm²], [mm³], [mm⁴].
+    /// </summary>
+    [Serializable]
+    public class Section_I : TB_Section
+    {
+        public double H { get; private set; }
+        public double W { get; private set; }
+        public double Tw { get; private set; }
+        public double Tf { get; private set; }
+        public double R { get; private set; }
+        /// <summary>Radii of gyration [mm] — give the slenderness for flexural buckling.</summary>
+        public double iy { get; private set; }
+        public double iz { get; private set; }
+        /// <summary>EN 1993-1-1 imperfection factors for buckling about y, about z, and LTB.</summary>
+        public double AlphaY { get; private set; }
+        public double AlphaZ { get; private set; }
+        public double AlphaLT { get; private set; }
+        /// <summary>Shear areas [mm²] and warping constant [mm⁶].</summary>
+        public double Ay { get; private set; }
+        public double Az { get; private set; }
+        public double Cw { get; private set; }
+
+        public Section_I() { }
+        public Section_I(TB_Material mat, SectionRecord r, double theta = 0)
+        {
+            H = r.H; W = Math.Max(r.BUpper, r.BLower); Tw = r.Tw; Tf = Math.Max(r.TUpper, r.TLower); R = r.R;
+            Tag = r.Name; Mat = mat; Theta = theta; Type = r.Family;
+            Area = r.A; Ay = r.Ay; Az = r.Az;
+            Iy = r.Iy; Iz = r.Iz; J = r.It; Cw = r.Cw;
+            Wy = r.Wy; Wz = r.Wz;
+            Wpy = r.Wply > 0 ? r.Wply : r.Wy;
+            Wpz = r.Wplz > 0 ? r.Wplz : r.Wz;
+            iy = r.iy > 0 ? r.iy : Math.Sqrt(r.Iy / r.A);
+            iz = r.iz > 0 ? r.iz : Math.Sqrt(r.Iz / r.A);
+            AlphaY = r.AlphaY; AlphaZ = r.AlphaZ; AlphaLT = r.AlphaLT;
+            Curves.AddRange(DrawCurves());
+        }
+
+        /// <summary>Outline in metres, centred on mid-height. Root fillets are not drawn.</summary>
+        private List<Curve> DrawCurves()
+        {
+            double h = 0.5 * H * 0.001, b = 0.5 * W * 0.001, t = 0.5 * Tw * 0.001, f = Tf * 0.001;
+            Pts = new List<Point3d> {
+                new Point3d(-b, h, 0), new Point3d(b, h, 0), new Point3d(b, -h, 0), new Point3d(-b, -h, 0)
+            };
+            var pts = new[] {
+                new Point3d(-b, h, 0), new Point3d(b, h, 0), new Point3d(b, h - f, 0),
+                new Point3d(t, h - f, 0), new Point3d(t, -h + f, 0), new Point3d(b, -h + f, 0),
+                new Point3d(b, -h, 0), new Point3d(-b, -h, 0), new Point3d(-b, -h + f, 0),
+                new Point3d(-t, -h + f, 0), new Point3d(-t, h - f, 0), new Point3d(-b, h - f, 0),
+                new Point3d(-b, h, 0)
+            };
+            return new List<Curve> { new Polyline(pts).ToNurbsCurve() };
+        }
+        public override string GetDims() => $"{Type}, {Tag}, H={H}, W={W}, tw={Tw}, tf={Tf}";
     }
 
     /// <summary>Custom section — user provides Area, Iy, Iz, J manually [mm², mm⁴, mm⁴, mm⁴].</summary>

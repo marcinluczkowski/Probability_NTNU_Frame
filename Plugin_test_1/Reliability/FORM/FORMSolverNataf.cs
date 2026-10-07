@@ -255,7 +255,8 @@ namespace Plugin_test_1.Reliability.FORM
             Func<double[], double[]> gradientX = null,
             double epsilon1 = 1e-6,
             double epsilon2 = 1e-6,
-            int maxIterations = 60)
+            int maxIterations = 60,
+            double gScale = 0.0)
         {
             if (variables == null || variables.Count == 0)
                 throw new ArgumentException("variables list cannot be null or empty.");
@@ -264,6 +265,12 @@ namespace Plugin_test_1.Reliability.FORM
 
             int n = variables.Count;
             var result = new FORMResult(n);
+
+            // The limit state is normalised by its own scale (the threshold) so that
+            // g is O(1) regardless of model units. Without this, a g of ~1e-3 m makes
+            // the merit function's penalty term negligible and the line search stalls.
+            // HL-RF is scale-invariant in g, so the search direction is unchanged.
+            double gRef = (Math.Abs(gScale) > 1e-12) ? Math.Abs(gScale) : 1.0;
             Nataf = new NatafTransform(variables, correlation);
 
             double[] u = new double[n];
@@ -293,6 +300,9 @@ namespace Plugin_test_1.Reliability.FORM
                 double[] gz = new double[n];
                 for (int i = 0; i < n; i++) gz[i] = gx[i] * J[i];
                 gu = Nataf.GradientUfromZ(gz);
+
+                g /= gRef;
+                for (int i = 0; i < n; i++) gu[i] /= gRef;
                 return true;
             }
 
@@ -323,7 +333,12 @@ namespace Plugin_test_1.Reliability.FORM
 
                 // merit m(u) = 0.5|u|^2 + c|g| with c > |u|/|grad g|
                 double normU = Math.Sqrt(u.Sum(v => v * v));
-                double c = 2.0 * normU / Math.Sqrt(ng2) + 10.0;
+                // c must be big enough that the design point has lower merit than the
+                // current point. Using |u| alone collapses c to 10 at the origin, which
+                // is far too small when the design point is distant. Use the HL-RF
+                // estimate of the design-point distance instead.
+                double betaEst = Math.Abs(g) / Math.Sqrt(ng2);
+                double c = 2.0 * Math.Max(normU, betaEst) / Math.Sqrt(ng2) + 10.0;
                 double m0 = 0.5 * u.Sum(v => v * v) + c * Math.Abs(g);
 
                 double step = 1.0;
@@ -331,7 +346,7 @@ namespace Plugin_test_1.Reliability.FORM
                 double[] uTry = null, gradTry = null, xTry = null;
                 double gTry = 0.0;
 
-                for (int ls = 0; ls < 12; ls++)
+                for (int ls = 0; ls < 30; ls++)
                 {
                     uTry = new double[n];
                     for (int i = 0; i < n; i++) uTry[i] = u[i] + step * d[i];
@@ -362,7 +377,9 @@ namespace Plugin_test_1.Reliability.FORM
                 for (int i = 0; i < n; i++) au += alpha[i] * u[i];
                 double crit2 = Math.Sqrt(Enumerable.Range(0, n)
                                    .Sum(i => Math.Pow(u[i] - au * alpha[i], 2)));
-                double crit1 = Math.Abs(g) / Math.Max(Math.Abs(g0), 1e-12);
+                // Normalising by g0 alone fails when the mean point lies on the
+                // limit-state surface (g0 ~ 0). Use the limit state's own scale.
+                double crit1 = Math.Abs(g);
 
                 if (crit1 < epsilon1 && crit2 < epsilon2)
                 {

@@ -1,12 +1,11 @@
-using System;
-using System.Collections.Generic;
-using System.Linq;
-
-using Rhino.Geometry;
-
 using CSparse;
 using CSparse.Double;
 using CSparse.Double.Factorization;
+using Grasshopper.Kernel.Types.Transforms;
+using Rhino.Geometry;
+using System;
+using System.Collections.Generic;
+using System.Linq;
 
 namespace Propability_NTNU_v1.Classes.Toolbox
 {
@@ -67,6 +66,8 @@ namespace Propability_NTNU_v1.Classes.Toolbox
         public int NodeId = 0;
         /// <summary>0..5 (ux,uy,uz,rx,ry,rz).</summary>
         public int Dof = 0;
+
+        public double Scale = 1.0;
 
         public NL_Response() { }
         public NL_Response(int nodeId, int dof) { NodeId = nodeId; Dof = dof; }
@@ -215,6 +216,8 @@ namespace Propability_NTNU_v1.Classes.Toolbox
         public bool Ok { get; private set; }
         public string Message { get; private set; } = "ok";
 
+        private readonly double _scale;
+
         private readonly double[] _u;
         private readonly bool[] _isFixed;
 
@@ -231,8 +234,9 @@ namespace Propability_NTNU_v1.Classes.Toolbox
                 for (int i = 0; i < N_DOF; i++)
                     if (n.Sup.Conditions[i]) _isFixed[N_DOF * n.Id.Value + i] = true;
 
+            _scale = resp.Scale;
             int respDof = N_DOF * resp.NodeId + resp.Dof;
-            ResponseValue = u[respDof];
+            ResponseValue = u[respDof] * _scale;
 
             try
             {
@@ -281,7 +285,7 @@ namespace Propability_NTNU_v1.Classes.Toolbox
 
             // --- adjoint solve: K_T lam = e_resp -----------------------------
             double[] eResp = Vector.Create(nDofTotal, 0.0);
-            if (!_isFixed[respDof]) eResp[respDof] = 1.0;
+            if (!_isFixed[respDof]) eResp[respDof] = _scale;
 
             var kSparse = SparseMatrix.OfMatrix(kT);
             var lu = SparseLU.Create(kSparse, ColumnOrdering.MinimumDegreeAtPlusA, Common.PRES);

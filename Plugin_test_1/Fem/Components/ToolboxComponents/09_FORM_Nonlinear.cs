@@ -79,6 +79,8 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
                 "sigma_i * dBeta/dMu_i at the design point.", GH_ParamAccess.list);
             pManager.AddTextParameter("Report", "Rep",
                 "Convergence, evaluation counts and binding self-check.", GH_ParamAccess.item);
+            pManager.AddNumberParameter("Beta History", "Bh",
+                "Beta at each iteration.", GH_ParamAccess.list);
         }
 
         protected override void SolveInstance(IGH_DataAccess DA)
@@ -192,9 +194,18 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
                 AddRuntimeMessage(GH_RuntimeMessageLevel.Warning,
                     "Model values differ from variable means:\n" + string.Join("\n", meanWarn.Take(8)));
 
+            // diagnostic: evaluate the limit state exactly where FORM starts (u = 0)
+            double[] xMean = vars.Select(v => v.Mean).ToArray();
+            double gMean = ls.G(xMean);
+            string startInfo =
+                $"\n\nAT THE MEAN POINT (where FORM starts):\n" +
+                $"   response = {(double.IsNaN(gMean) ? double.NaN : u0 - gMean):G6}\n" +
+                $"   g        = {gMean:G6}   (threshold {u0:G6})\n" +
+                (double.IsNaN(gMean) ? "   FE SOLVE FAILED AT THE MEAN POINT\n" : "");
+
             if (!run)
             {
-                DA.SetData(6, selfCheck + "\n\nSet Run = true to perform the analysis." +
+                DA.SetData(6, selfCheck + startInfo + "\n\nSet Run = true to perform the analysis." +
                     (meanWarn.Count > 0 ? "\n\nMean mismatches:\n" + string.Join("\n", meanWarn.Take(8)) : ""));
                 return;
             }
@@ -210,7 +221,8 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
                     x => ls.G(x),
                     correlation: rho,
                     gradientX: useDdm ? (Func<double[], double[]>)(x => ls.GradX(x)) : null,
-                    epsilon1: 1e-6, epsilon2: 1e-6, maxIterations: maxIt);
+                    epsilon1: 1e-6, epsilon2: 1e-6, maxIterations: maxIt,
+                    gScale: Math.Abs(u0));
             }
             catch (Exception ex)
             {
@@ -227,7 +239,7 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
                 $"beta = {res.Beta:F5}   Pf = {res.ProbabilityOfFailure:E4}\n" +
                 $"FE solves: {ls.Evaluations}  (failed: {ls.FailedSolves})\n" +
                 $"gradient : {(useDdm ? "DDM (analytical)" : "finite differences")}\n" +
-                $"elapsed  : {sw.Elapsed.TotalSeconds:F1} s\n" +
+                $"elapsed  : {sw.Elapsed.TotalSeconds:F1} s\n" + startInfo + "\n" +
                 (solver.Nataf.Warnings.Count > 0
                     ? "Nataf warnings:\n  " + string.Join("\n  ", solver.Nataf.Warnings) + "\n" : "") +
                 selfCheck;
@@ -240,6 +252,7 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             DA.SetDataList(4, res.AlphaFactors);
             DA.SetDataList(5, solver.ScaledMeanSensitivity);
             DA.SetData(6, report);
+            DA.SetDataList(7, res.BetaHistory);
         }
 
         protected override System.Drawing.Bitmap Icon => IconHelper.Create("\u03B2");

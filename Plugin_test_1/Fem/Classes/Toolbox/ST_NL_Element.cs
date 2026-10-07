@@ -107,7 +107,7 @@ namespace Propability_NTNU_v1.Classes.Toolbox
             double Emod = e.Sec.Mat.E;      // [N/mm2]
             double A = e.Sec.Area;          // [mm2]
 
-            double Egl = (l2 - L2) / (2.0 * L2);   // dimensionless
+            double Egl = (l2 - L2) / (2.0 * L2);   // dimensionless E_green-langrange
             double S = Emod * Egl;                 // [N/mm2]
             axialForce = S * A;                    // [N]  (+tension)
 

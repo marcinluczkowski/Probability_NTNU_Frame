@@ -100,8 +100,9 @@ namespace Propability_NTNU_v1.Classes.Reliability
             }
 
             double[] u = work.Disps[0];
-            double uResp = u[6 * _resp.NodeId + _resp.Dof];
-            _lastG = _threshold - uResp;
+            double raw = u[6 * _resp.NodeId + _resp.Dof];
+            _resp.Scale = (raw < 0.0) ? -1.0 : 1.0;   // response is |u|; sign set per evaluation
+            _lastG = _threshold - raw * _resp.Scale;
 
             NL_DDM ddm = new NL_DDM(work, u, _resp, _pars);
             if (!ddm.Ok) { _lastOk = false; FailedSolves++; return; }
@@ -194,7 +195,7 @@ namespace Propability_NTNU_v1.Classes.Reliability
         /// Parses a compact binding string into an NL_Parameter.
         ///
         ///   "E:STRUT"       modulus of every element with section tag STRUT
-        ///   "X:1:0"         original X coordinate of node 1   (comp 0=X 1=Y 2=Z)
+        ///   "X:1:0"         original X coordinate of node 1   (0=X 1=Y 2=Z)
         ///   "F:5:0"         point load at node 5, DOF 0
         ///   "F:10:2:-1"     point load at node 10, DOF 2, applied in the -Z sense
         /// </summary>
