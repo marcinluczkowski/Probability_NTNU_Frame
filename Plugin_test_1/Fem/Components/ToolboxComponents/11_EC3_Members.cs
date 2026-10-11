@@ -28,8 +28,8 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
         public ST_EC3_Members()
           : base("EC3 Members", "EC3 Mem",
               "Eurocode check of every member of a linear-elastic truss model. Design forces from " +
-              "EN 1990 (6.10a) and (6.10b), Norwegian NA. Resistance: tension and flexural buckling " +
-              "about both axes, EN 1993-1-1.",
+              "EN 1990 (6.10a) and (6.10b), Norwegian NA. EN 1993-1-1: tension, compression and flexural " +
+              "buckling about both axes, with the bending moments from the rigid joints (switch: Bending).",
               Common.category, Common.sub_analize)
         {
         }
@@ -46,26 +46,33 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
                 "Example: \"0:G\" and \"1:Q:0.7\".",
                 GH_ParamAccess.list);
             pManager.AddTextParameter("Buckling Lengths", "Lcr",
-                "Optional, one per line: \"<tag>:<Lcr,y>:<Lcr,z>\" in metres, for the members with this " +
+                "Optional, one per line: \"<tag>:<Lcr,y>:<Lcr,z>[:<L,LT>]\" in metres (L,LT = length between lateral restraints for lateral-torsional buckling, default Lcr,z), for the members with this " +
                 "element tag. Default: the element length about both axes. Use the same as in FORM Members.",
                 GH_ParamAccess.list);
+            pManager.AddBooleanParameter("Bending", "Bend",
+                "true (default): members are checked for the axial force AND the bending moments from the rigid " +
+                "joints (EN 1993-1-1 6.2.1(7), 6.3.3 with Annex B, lateral-torsional buckling; elastic, Cm >= 0.9, " +
+                "as Karamba3D's defaults). false: axial force only.", GH_ParamAccess.item, true);
 
             pManager[2].Optional = true;
+            pManager[3].Optional = true;
         }
 
         protected override void RegisterOutputParams(GH_Component.GH_OutputParamManager pManager)
         {
             pManager.AddTextParameter("Tags", "Tag", "Element tag of each member, in model order.", GH_ParamAccess.list);
             pManager.AddTextParameter("Mode", "Mode",
-                "Governing check of each member: tension, buckling y or buckling z. " +
-                "\"no axial force\" for a member that no combination stresses axially (its Utilisation is NaN).", GH_ParamAccess.list);
+                "Governing check of each member: tension, compression, buckling y or buckling z. " +
+                "\"no axial force\" for a member that no combination stresses (its Utilisation is NaN).", GH_ParamAccess.list);
             pManager.AddNumberParameter("NEd", "NEd",
                 "Design axial force of the governing check [kN], tension positive.", GH_ParamAccess.list);
             pManager.AddNumberParameter("NRd", "NRd", "Design resistance of the governing check [kN].", GH_ParamAccess.list);
-            pManager.AddNumberParameter("Utilisation", "U", "NEd / NRd of each member (governing check).", GH_ParamAccess.list);
+            pManager.AddNumberParameter("Utilisation", "U",
+                "Utilisation of each member (governing check): NEd / NRd, or the N+M interaction value with Bending.", GH_ParamAccess.list);
             pManager.AddTextParameter("Combination", "Comb", "Governing load combination of each member.", GH_ParamAccess.list);
             pManager.AddNumberParameter("Utilisation Modes", "Um",
-                "One branch per member: utilisation for tension, buckling y, buckling z (NaN where not checked).",
+                "One branch per member: utilisation for tension, buckling y, buckling z, compression (NaN where not " +
+                "checked; compression only with Bending).",
                 GH_ParamAccess.tree);
             pManager.AddNumberParameter("N Characteristic", "Nk",
                 "One branch per member: axial force under each load case as modelled [kN], in the order of Load Cases.",
@@ -80,11 +87,14 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             GH_TB_Model gh_mdl = null;
             List<string> lcSpecs = new List<string>();
             List<string> lcrSpecs = new List<string>();
+            bool bending = true;
 
             // --- input ---
             if (!DA.GetData(0, ref gh_mdl)) { return; }
             if (!DA.GetDataList(1, lcSpecs)) { return; }
             DA.GetDataList(2, lcrSpecs);
+            DA.GetData(3, ref bending);
+            MemberCheckOptions options = bending ? MemberCheckOptions.Default() : MemberCheckOptions.AxialOnly();
 
             if (gh_mdl == null || gh_mdl.Value == null)
             {
@@ -115,7 +125,7 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             EcCheckResult res;
             try
             {
-                res = EurocodeMemberCheck.Run(mdl, loadCases, lcr);
+                res = EurocodeMemberCheck.Run(mdl, loadCases, lcr, null, options);
             }
             catch (Exception ex)
             {
@@ -162,14 +172,14 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
                     if (g.Utilisation > 1.0) over++;
                 }
 
-                // utilisation of each mode: tension, buckling y, buckling z
-                double[] um = { double.NaN, double.NaN, double.NaN };
+                // utilisation of each mode: tension, buckling y, buckling z, compression
+                double[] um = { double.NaN, double.NaN, double.NaN, double.NaN };
                 foreach (EcMemberCheck c in res.Checks)
                 {
                     if (c.Member != m) continue;
                     um[(int)c.Mode] = c.Utilisation;
                 }
-                for (int i = 0; i < 3; i++) utilModes.Add(um[i], path);
+                for (int i = 0; i < um.Length; i++) utilModes.Add(um[i], path);
 
                 for (int i = 0; i < res.NChar[m].Length; i++) nChar.Add(res.NChar[m][i] * 1e-3, path);
             }
@@ -208,13 +218,14 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
                 if (string.IsNullOrWhiteSpace(s)) continue;
 
                 string[] t = s.Split(':');
-                double ly, lz;
-                if (t.Length < 3 ||
+                double ly, lz, llt = 0.0;
+                if (t.Length < 3 || t.Length > 4 ||
                     !double.TryParse(t[1].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out ly) ||
-                    !double.TryParse(t[2].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out lz))
-                    throw new ArgumentException($"Buckling length '{s}': expected \"<tag>:<Lcr,y>:<Lcr,z>\" in metres.");
+                    !double.TryParse(t[2].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out lz) ||
+                    (t.Length == 4 && !double.TryParse(t[3].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out llt)))
+                    throw new ArgumentException($"Buckling length '{s}': expected \"<tag>:<Lcr,y>:<Lcr,z>[:<L,LT>]\" in metres.");
 
-                target[t[0].Trim()] = new[] { ly, lz };
+                target[t[0].Trim()] = (t.Length == 4) ? new[] { ly, lz, llt } : new[] { ly, lz };
             }
         }
 

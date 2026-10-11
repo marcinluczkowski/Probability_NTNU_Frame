@@ -5,12 +5,21 @@
 //  Member limit states for a linear-elastic truss model, and the routine that runs
 //  FORM on every one of them.
 //
-//  LIMIT STATES (N = member axial force, tension positive)
+//  LIMIT STATES WITH BENDING (default, MemberCheckOptions.Bending = true)
+//    g = 1 - U,  U = the EN 1993-1-1 utilisation of ST_LS_MemberInteraction.cs with
+//    gamma_M = 1, the characteristic resistances times thetaR and the member end
+//    forces (N and the end moments from the rigid joints) times thetaE:
+//    tension        cross-section 6.2.1(7) (and lateral-torsional buckling, N = 0)
+//    compression    cross-section 6.2.1(7)
+//    buckling y     (6.61)       buckling z     (6.62)
+//
+//  LIMIT STATES, AXIAL ONLY (MemberCheckOptions.Bending = false; N tension positive)
 //    tension yield                g = thetaR * fy * A                 - thetaE * N
 //    flexural buckling about y    g = thetaR * chi_y(fy, E) * fy * A  + thetaE * N
 //    flexural buckling about z    g = thetaR * chi_z(fy, E) * fy * A  + thetaE * N
+//  Both forms have the same failure surface when the moments are zero.
 //
-//  chi is the EN 1993-1-1 buckling reduction factor (6.3.1.2), evaluated with the
+//  chi (and chi_LT) are the EN 1993-1-1 reduction factors, evaluated with the
 //  RANDOM fy and E, so the resistance model is the Eurocode one and its bias and
 //  scatter are carried by the model uncertainty thetaR.
 //
@@ -19,16 +28,20 @@
 //  correlation between member failures available later (rho_ij = alpha_i . alpha_j).
 //
 //  GRADIENTS
-//  dg/dx is analytical: the member-force part comes from LS_DDM (direct
-//  differentiation of the FE equations), the resistance part is differentiated here.
+//  The member-force part always comes from LS_DDM (direct differentiation of the FE
+//  equations: dN/dp, and with bending also the end moments dM/dp). Axial only, the
+//  resistance part is differentiated analytically here. With bending, the partial
+//  derivatives of the closed-form EN 1993-1-1 expressions (with respect to the end
+//  forces, fy, E and thetaR) are taken by central differences - no FE solve.
 //
 //  SYSTEM
 //  After the member limit states, the structure is assessed as a series system of all of
 //  them (ST_LS_SystemReliability.cs), from the beta and alpha that FORM found.
 //
 //  WHICH LIMIT STATES ARE ASSESSED
-//  Tension if any load case puts the member in tension, buckling if any load case puts it
-//  in compression. FORM is run on every one of them and the beta it finds is reported,
+//  Tension if any load case puts the member in tension, buckling (and, with bending, the
+//  compressed cross-section) if any load case puts it in compression. With bending, a member
+//  with end moments but no axial force gets the tension (cross-section) check. FORM is run on every one of them and the beta it finds is reported,
 //  however large. Only a member that no load case stresses axially has no limit state.
 //
 //  UNITS: forces [N], A [mm2], fy and E [N/mm2], lengths [m], radii of gyration [mm].
@@ -170,7 +183,9 @@ namespace Propability_NTNU_v1.Classes.Reliability
     {
         Tension,
         BucklingY,
-        BucklingZ
+        BucklingZ,
+        /// <summary>Cross-section check under compression and bending (only with bending).</summary>
+        Compression
     }
 
     /// <summary>What the limit states need to know about one member. Read once from the model.</summary>
@@ -181,6 +196,18 @@ namespace Propability_NTNU_v1.Classes.Reliability
         public string SectionTag = "";
         /// <summary>Area [mm2] and elastic section moduli [mm3].</summary>
         public double A, Wy, Wz;
+        /// <summary>Plastic section moduli [mm3] (the elastic ones where the section has none).</summary>
+        public double Wpy, Wpz;
+        /// <summary>Second moment about z [mm4], torsion constant [mm4] and warping constant [mm6].</summary>
+        public double Iz, It, Iw;
+        /// <summary>Shear modulus of the model material [N/mm2].</summary>
+        public double G0;
+        /// <summary>Open I-section: lateral-torsional buckling applies and it is susceptible to torsional deformation.</summary>
+        public bool OpenSection;
+        /// <summary>Imperfection factor for lateral-torsional buckling (0.34, curve b, if the section has none).</summary>
+        public double AlphaLT = 0.34;
+        /// <summary>Length between lateral restraints for lateral-torsional buckling [m]. Default: Lcr,z.</summary>
+        public double LcrLT;
         /// <summary>Yield strength and modulus of the model material [N/mm2].</summary>
         public double Fy0, E0;
         /// <summary>Member length and buckling lengths about y and z [m].</summary>
@@ -246,6 +273,8 @@ namespace Propability_NTNU_v1.Classes.Reliability
         public List<MemberData> Members { get; private set; }
         public List<MemberVariable> Variables { get; private set; }
         public int NVar { get { return Variables.Count; } }
+        /// <summary>Axial only, or axial force + bending (MemberInteraction).</summary>
+        public MemberCheckOptions Options { get; private set; }
 
         private readonly int[] _feVar;        // FE parameter -> variable index
         private readonly bool[] _feIsLoad;    // FE parameter is a load case (else a modulus)
@@ -255,10 +284,13 @@ namespace Propability_NTNU_v1.Classes.Reliability
         private readonly int _iTE = -1;       // variable holding thetaE, -1 = 1.0
 
         // --- constructors ---
-        /// <param name="bucklingLengths">Optional: element tag -> { Lcr,y ; Lcr,z } in [m].</param>
+        /// <param name="bucklingLengths">Optional: element tag -> { Lcr,y ; Lcr,z [; L,LT] } in [m].</param>
+        /// <param name="options">How members are checked; null = with bending (MemberCheckOptions defaults).</param>
         public LS_MemberLimitStates(TB_Model mdl, IList<MemberVariable> variables,
-                                    IDictionary<string, double[]> bucklingLengths = null)
+                                    IDictionary<string, double[]> bucklingLengths = null,
+                                    MemberCheckOptions options = null)
         {
+            Options = options ?? MemberCheckOptions.Default();
             if (mdl == null) throw new ArgumentNullException(nameof(mdl));
             if (mdl.Elem1Ds == null || mdl.Elem1Ds.Count == 0)
                 throw new ArgumentException("The model has no elements.");
@@ -284,6 +316,7 @@ namespace Propability_NTNU_v1.Classes.Reliability
                         if (!TagMatches(md.Tag, kv.Key)) continue;
                         md.LcrY = kv.Value[0];
                         md.LcrZ = kv.Value[1];
+                        md.LcrLT = (kv.Value.Length > 2 && kv.Value[2] > 0.0) ? kv.Value[2] : kv.Value[1];
                         count++;
                     }
                     if (count == 0)
@@ -342,10 +375,13 @@ namespace Propability_NTNU_v1.Classes.Reliability
 
         // --- methods ---
 
-        /// <summary>fy(model) * A [N]: the scale that makes g of order one.</summary>
+        /// <summary>
+        /// The scale that makes g of order one: fy(model) * A [N] for the axial limit states,
+        /// 1 with bending (g = 1 - U is already dimensionless).
+        /// </summary>
         public double Scale(int m)
         {
-            return Members[m].Fy0 * Members[m].A;
+            return Options.Bending ? 1.0 : Members[m].Fy0 * Members[m].A;
         }
 
         /// <summary>g(x). Returns NaN where the limit state cannot be evaluated.</summary>
@@ -434,6 +470,9 @@ namespace Propability_NTNU_v1.Classes.Reliability
             if (!(fy > 0.0) || !(E > 0.0) || !(tR > 0.0) || !(tE > 0.0)) return double.NaN;
             if (!Prepare(x)) return double.NaN;
 
+            if (Options.Bending)
+                return EvaluateInteraction(m, mode, fy, E, tR, tE, grad, out resistance);
+
             double N = Fe.N[m];
 
             // g = tR * R - sign * tE * N, with R the resistance without model uncertainty
@@ -483,6 +522,76 @@ namespace Propability_NTNU_v1.Classes.Reliability
             return g;
         }
 
+        /// <summary>
+        /// Limit state with bending: g = 1 - U, U from MemberInteraction.Utilisation with the member
+        /// end forces times thetaE, the characteristic resistances times thetaR, and the random fy
+        /// and E (G = G_model * E / E_model). FE state already prepared at x.
+        ///
+        /// Gradient: dU/dp = sum_j dU/dF_j * thetaE * dF_j/dp, with dF_j/dp (N and the end moments)
+        /// from the DDM solve and dU/dF_j, dU/dfy, dU/dE, dU/dthetaR by central differences on the
+        /// closed-form EN 1993-1-1 expressions (no FE solve involved).
+        /// </summary>
+        private double EvaluateInteraction(int m, MemberMode mode, double fy, double E, double tR, double tE,
+                                           double[] grad, out double resistance)
+        {
+            MemberData md = Members[m];
+            resistance = 1.0;
+
+            EndForces f = EndForces.FromLocal(Fe.LocalEndForces(m));
+            EndForces fe = f.Scaled(tE);
+            MemberCheckOptions o = Options;
+            Func<EndForces, double, double, double, double> U = (ff, fyv, ev, trv) =>
+                MemberInteraction.Utilisation(md, ff, fyv, ev, md.G0 * ev / md.E0, trv, trv, o, mode);
+
+            double u = U(fe, fy, E, tR);
+            if (double.IsNaN(u) || double.IsInfinity(u)) return double.NaN;
+            double g = 1.0 - u;
+            if (grad == null) return g;
+
+            for (int i = 0; i < grad.Length; i++) grad[i] = 0.0;
+
+            // dU/dF_j, F = (N, My1, My2, Mz1, Mz2) after thetaE
+            double[] dUdF = new double[5];
+            double nRef = 1e-3 * md.Fy0 * md.A;                       // [N]
+            double mRef = 1e-3 * md.Fy0 * md.Wy * 1e-3;               // [N.m]
+            for (int j = 0; j < 5; j++)
+            {
+                double h = 1e-6 * (Math.Abs(fe[j]) + ((j == 0) ? nRef : mRef));
+                EndForces fp = fe, fm = fe;
+                fp[j] = fe[j] + h;
+                fm[j] = fe[j] - h;
+                dUdF[j] = (U(fp, fy, E, tR) - U(fm, fy, E, tR)) / (2.0 * h);
+            }
+
+            // member forces: DDM
+            double[][] dF = Fe.LocalEndForceGradient(m, EndForces.Rows);
+            for (int ip = 0; ip < _feVar.Length; ip++)
+            {
+                double dU = 0.0;
+                for (int j = 0; j < 5; j++) dU += dUdF[j] * tE * dF[EndForces.Rows[j]][ip];
+                grad[_feVar[ip]] += -dU;
+            }
+
+            // resistance and model uncertainties
+            if (_iFy[m] >= 0) grad[_iFy[m]] += -Central(v => U(fe, v, E, tR), fy);
+            if (_iE[m] >= 0) grad[_iE[m]] += -Central(v => U(fe, fy, v, tR), E);
+            if (_iTR >= 0) grad[_iTR] += -Central(v => U(fe, fy, E, v), tR);
+            if (_iTE >= 0)
+            {
+                double dU = 0.0;
+                for (int j = 0; j < 5; j++) dU += dUdF[j] * f[j];
+                grad[_iTE] += -dU;
+            }
+            return g;
+        }
+
+        /// <summary>Central difference of a scalar function at v > 0, relative step 1e-6.</summary>
+        private static double Central(Func<double, double> fun, double v)
+        {
+            double h = 1e-6 * Math.Abs(v);
+            return (fun(v + h) - fun(v - h)) / (2.0 * h);
+        }
+
         private void AssignGroup(int[] target, int variable, MemberVariable v, string what)
         {
             int count = 0;
@@ -516,8 +625,13 @@ namespace Propability_NTNU_v1.Classes.Reliability
                 Tag = e.Tag ?? "",
                 SectionTag = sec.Tag ?? "",
                 A = sec.Area,
-                Wy = sec.Wy,
-                Wz = sec.Wz,
+                Wy = Math.Abs(sec.Wy),
+                Wz = Math.Abs(sec.Wz),
+                Wpy = (sec.Wpy > 0.0) ? sec.Wpy : Math.Abs(sec.Wy),
+                Wpz = (sec.Wpz > 0.0) ? sec.Wpz : Math.Abs(sec.Wz),
+                Iz = sec.Iz,
+                It = sec.J,
+                G0 = sec.Mat.G,
                 Fy0 = sec.Mat.Fy,
                 E0 = sec.Mat.E,
                 Length = e.Line.Length
@@ -526,8 +640,15 @@ namespace Propability_NTNU_v1.Classes.Reliability
             double lcr = (e.Buckling_Length > 0.0) ? e.Buckling_Length : md.Length;
             md.LcrY = lcr;
             md.LcrZ = lcr;
+            md.LcrLT = lcr;
 
             Section_I si = sec as Section_I;
+            if (si != null)
+            {
+                md.OpenSection = true;
+                md.Iw = si.Cw;
+                if (si.AlphaLT > 0.0) md.AlphaLT = si.AlphaLT;
+            }
             if (si != null && si.iy > 0.0 && si.iz > 0.0 && si.AlphaY > 0.0 && si.AlphaZ > 0.0)
             {
                 md.iy = si.iy;
@@ -586,7 +707,8 @@ namespace Propability_NTNU_v1.Classes.Reliability
             {
                 case MemberMode.Tension: return "tension";
                 case MemberMode.BucklingY: return "buckling y";
-                default: return "buckling z";
+                case MemberMode.BucklingZ: return "buckling z";
+                default: return "compression";
             }
         }
     }
@@ -596,11 +718,13 @@ namespace Propability_NTNU_v1.Classes.Reliability
         public List<MemberData> Members = new List<MemberData>();
         public List<string> VariableNames = new List<string>();
         public List<string> VariableRoles = new List<string>();
+        /// <summary>How the members were checked (axial only, or axial force + bending).</summary>
+        public MemberCheckOptions Options = MemberCheckOptions.Default();
         /// <summary>Every limit state that was assessed, in member order.</summary>
         public List<MemberLimitStateResult> LimitStates = new List<MemberLimitStateResult>();
         /// <summary>
         /// The limit state with the lowest beta of each member. Null for a member that no load
-        /// case stresses axially: it has no axial limit state.
+        /// case stresses (no axial force, and no moment when bending is checked).
         /// </summary>
         public MemberLimitStateResult[] Governing = new MemberLimitStateResult[0];
         /// <summary>Axial force of each member at the mean point [N].</summary>
@@ -616,8 +740,8 @@ namespace Propability_NTNU_v1.Classes.Reliability
 
         /// <summary>
         /// Axial and bending stress of each member at the mean point [N/mm2]. The bending stress
-        /// (largest end moments about y and z, elastic) comes from the rigid joints and is NOT
-        /// part of the limit states; it is kept to show how much it matters.
+        /// (largest end moments about y and z, elastic) comes from the rigid joints. It is part of
+        /// the limit states only when Options.Bending is true; otherwise it shows how much it matters.
         /// </summary>
         public double[] AxialStress = new double[0];
         public double[] BendingStress = new double[0];
@@ -640,6 +764,9 @@ namespace Propability_NTNU_v1.Classes.Reliability
             var sb = new StringBuilder();
 
             sb.AppendLine("MEMBER RELIABILITY (linear analysis, FORM per member limit state)");
+            sb.AppendLine("Members checked for " + Options.Describe() + ".");
+            if (Options.Bending)
+                sb.AppendLine("g = 1 - U, U = EN 1993-1-1 utilisation with gamma_M = 1, resistances x thetaR, member forces x thetaE.");
             sb.AppendLine();
             sb.AppendLine("Variables:");
             for (int i = 0; i < VariableNames.Count; i++)
@@ -681,8 +808,9 @@ namespace Propability_NTNU_v1.Classes.Reliability
             for (int m = 0; m < Governing.Length; m++)
                 if (Governing[m] == null) unloaded++;
             if (unloaded > 0)
-                sb.AppendLine(unloaded.ToString(ci) +
-                              " member(s) are not stressed axially by any load case and have no axial limit state.");
+                sb.AppendLine(unloaded.ToString(ci) + (Options.Bending
+                    ? " member(s) are not stressed by any load case and have no limit state."
+                    : " member(s) are not stressed axially by any load case and have no axial limit state."));
 
             if (SystemResult != null)
             {
@@ -701,7 +829,9 @@ namespace Propability_NTNU_v1.Classes.Reliability
                 for (int m = 1; m < BendingStress.Length; m++)
                     if (BendingStress[m] > BendingStress[worst]) worst = m;
 
-                sb.AppendLine("Bending from the rigid joints at the mean point (not part of the limit states):");
+                sb.AppendLine(Options.Bending
+                    ? "Bending from the rigid joints at the mean point (included in the limit states):"
+                    : "Bending from the rigid joints at the mean point (not part of the limit states):");
                 sb.AppendLine("  critical member [" + CriticalMember.ToString(ci) + "] " + Members[CriticalMember].Tag +
                               ": axial " + AxialStress[CriticalMember].ToString("F1", ci) + " MPa, bending " +
                               BendingStress[CriticalMember].ToString("F1", ci) + " MPa (" +
@@ -750,7 +880,8 @@ namespace Propability_NTNU_v1.Classes.Reliability
             IDictionary<string, double[]> bucklingLengths = null,
             int maxIterations = 300,
             bool checkGradients = false,
-            int systemSamples = SystemReliability.DefaultSamples)
+            int systemSamples = SystemReliability.DefaultSamples,
+            MemberCheckOptions options = null)
         {
             if (vars == null || bindings == null || vars.Count == 0)
                 throw new ArgumentException("At least one random variable is required.");
@@ -758,10 +889,11 @@ namespace Propability_NTNU_v1.Classes.Reliability
                 throw new ArgumentException(
                     $"{vars.Count} random variables but {bindings.Count} bindings. They must match 1:1.");
 
-            var ls = new LS_MemberLimitStates(mdl, bindings, bucklingLengths);
+            var ls = new LS_MemberLimitStates(mdl, bindings, bucklingLengths, options);
             int nMem = ls.Members.Count;
 
             var res = new MemberReliabilityResult();
+            res.Options = ls.Options;
             res.Members = ls.Members;
             res.VariableNames = vars.Select(v => v.Name).ToList();
             for (int i = 0; i < vars.Count; i++)
@@ -793,22 +925,26 @@ namespace Propability_NTNU_v1.Classes.Reliability
                 double tens, comp;
                 ls.SignedParts(xMean, m, out tens, out comp);
 
-                modes[m] = new List<MemberMode>();
-                if (tens > tol) modes[m].Add(MemberMode.Tension);
-                if (comp < -tol)
-                {
-                    modes[m].Add(MemberMode.BucklingY);
-                    modes[m].Add(MemberMode.BucklingZ);
-                }
-
-                // stresses at the mean point; the bending part comes from the rigid joints and is
-                // not in the limit states (end moments in [N.m], section moduli in [mm3])
+                // stresses at the mean point; the bending part comes from the rigid joints
+                // (end moments in [N.m], section moduli in [mm3])
                 double[] f = ls.Fe.LocalEndForces(m);
                 double sigM = 0.0;
                 if (md.Wy > 0.0) sigM += Math.Max(Math.Abs(f[4]), Math.Abs(f[10])) * 1e3 / md.Wy;
                 if (md.Wz > 0.0) sigM += Math.Max(Math.Abs(f[5]), Math.Abs(f[11])) * 1e3 / md.Wz;
                 res.AxialStress[m] = Math.Abs(nMean[m]) / md.A;
                 res.BendingStress[m] = sigM;
+
+                modes[m] = new List<MemberMode>();
+                if (tens > tol) modes[m].Add(MemberMode.Tension);
+                if (comp < -tol)
+                {
+                    if (ls.Options.Bending) modes[m].Add(MemberMode.Compression);
+                    modes[m].Add(MemberMode.BucklingY);
+                    modes[m].Add(MemberMode.BucklingZ);
+                }
+                // with bending, a member with moments but no axial force still has a check
+                if (ls.Options.Bending && modes[m].Count == 0 && sigM > ZeroForce * md.Fy0)
+                    modes[m].Add(MemberMode.Tension);
             }
 
             int assumed = ls.Members.Count(mem => mem.AssumedBucklingCurve);
@@ -856,9 +992,18 @@ namespace Propability_NTNU_v1.Classes.Reliability
                             epsilon1: 1e-6, epsilon2: 1e-6, maxIterations: maxIterations,
                             gScale: ls.Scale(m));
 
+                        if (!fr.Converged && OnKink(fr, x => ls.G(x, memberIndex, memberMode) / ls.Scale(memberIndex)))
+                        {
+                            fr.Converged = true;
+                            fr.ConvergenceMessage = "Converged on a kink of the limit state (beta stationary, g = 0); " +
+                                                    fr.ConvergenceMessage;
+                        }
+
                         row.Form = fr;
                         row.MeanSensitivity = solver.ScaledMeanSensitivity;
-                        row.Status = fr.Converged ? "ok" : fr.ConvergenceMessage;
+                        row.Status = fr.Converged
+                            ? (fr.ConvergenceMessage.StartsWith("Converged on a kink") ? "ok (kink)" : "ok")
+                            : fr.ConvergenceMessage;
 
                         if (solver.Nataf != null)
                             foreach (string w in solver.Nataf.Warnings) nataf.Add(w);
@@ -930,6 +1075,26 @@ namespace Propability_NTNU_v1.Classes.Reliability
         }
 
         /// <summary>
+        /// True when HL-RF stopped on a design point that lies on a kink of the limit-state surface:
+        /// the last three beta values agree to 1e-6 (relative) and g at the last point is zero
+        /// (|g| / scale &lt; 1e-4). The EN 1993-1-1 expressions switch branch at fixed values (the bound
+        /// lambda &lt;= 1 in the Annex B interaction factors, Cm = CmMin, lambda_LT = 0.4, which end
+        /// moment is the larger), and the closest failure point can sit exactly on such a switch.
+        /// There the gradient is not unique, so the angle criterion of HL-RF cannot be met and the
+        /// line search stalls, although the distance (beta) has converged.
+        /// </summary>
+        private static bool OnKink(FORMResult fr, Func<double[], double> gScaled)
+        {
+            List<double> h = fr.BetaHistory;
+            if (h == null || h.Count < 3 || fr.MPP_X == null) return false;
+            double b1 = h[h.Count - 1], b2 = h[h.Count - 2], b3 = h[h.Count - 3];
+            double spread = Math.Max(Math.Abs(b1 - b2), Math.Abs(b1 - b3));
+            if (!(spread <= 1e-6 * Math.Max(1.0, Math.Abs(b1)))) return false;
+            double g = gScaled(fr.MPP_X);
+            return !double.IsNaN(g) && Math.Abs(g) < 1e-4;
+        }
+
+        /// <summary>
         /// Compares the analytical gradients with central finite differences at x. Differences are
         /// weighted by the standard deviation of each variable, which is how they enter FORM.
         /// </summary>
@@ -954,7 +1119,31 @@ namespace Propability_NTNU_v1.Classes.Reliability
                         num = Math.Max(num, Math.Abs(ls.Fe.dN[m][ip] - fd[m][ip]) * w);
                         den = Math.Max(den, Math.Abs(fd[m][ip]) * w);
                     }
-                    if (den > 1e-6 * ls.Scale(m)) worstN = Math.Max(worstN, num / den);
+                    if (den > 1e-6 * ls.Members[m].Fy0 * ls.Members[m].A) worstN = Math.Max(worstN, num / den);
+                }
+
+                // with bending: the end moments as well
+                if (ls.Options.Bending)
+                {
+                    double[][][] fdF = ls.Fe.FiniteDifference_dF(p);
+                    ls.Fe.Evaluate(p);
+                    for (int m = 0; m < ls.Members.Count; m++)
+                    {
+                        double[][] ddmF = ls.Fe.LocalEndForceGradient(m, EndForces.Rows);
+                        double mRef = 1e-6 * ls.Members[m].Fy0 * ls.Members[m].Wy * 1e-3;     // [N.m]
+                        foreach (int r in EndForces.Rows)
+                        {
+                            if (r == 6) continue;                                            // N: done above
+                            double num = 0.0, den = 0.0;
+                            for (int ip = 0; ip < p.Length; ip++)
+                            {
+                                double w = Math.Abs(p[ip]);
+                                num = Math.Max(num, Math.Abs(ddmF[r][ip] - fdF[m][r][ip]) * w);
+                                den = Math.Max(den, Math.Abs(fdF[m][r][ip]) * w);
+                            }
+                            if (den > mRef) worstN = Math.Max(worstN, num / den);
+                        }
+                    }
                 }
             }
             res.GradientErrorForces = worstN;

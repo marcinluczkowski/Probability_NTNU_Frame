@@ -52,6 +52,9 @@
 //  optimisation. For the Eurocode design the reliability is the IMPLIED one: FORM on
 //  the same random variables as the reliability-based design (AddImpliedReliability).
 //
+//  MEMBER CHECKS: both criteria use MemberCheckOptions (default: axial force + the
+//  bending moments from the rigid joints, ST_LS_MemberInteraction.cs; or axial only).
+//
 //  NOT INCLUDED: self-weight is not a load in the model, so the loads do not change
 //  with the sections. A member that no load case stresses gets the lightest candidate.
 // =============================================================================
@@ -164,7 +167,7 @@ namespace Propability_NTNU_v1.Classes.Reliability
                 sb.Append(GroupSections[g].PadRight(10) + " ");
                 sb.Append(GroupWeights[g].ToString("F1", ci).PadLeft(12) + " ");
                 if (worst < 0)
-                    sb.AppendLine("        -   (no axial force)");
+                    sb.AppendLine("        -   (not stressed)");
                 else
                     sb.AppendLine(Final.Value[worst].ToString("F3", ci).PadLeft(9) + "   [" + worst.ToString(ci) + "] " +
                                   Model.Elem1Ds[worst].Tag +
@@ -716,9 +719,11 @@ namespace Propability_NTNU_v1.Classes.Reliability
             int maxIterations = 300,
             int systemSamples = SystemReliability.DefaultSamples,
             int exchangeDepth = DefaultExchangeDepth,
-            int maxEvaluations = DefaultMaxEvaluations)
+            int maxEvaluations = DefaultMaxEvaluations,
+            MemberCheckOptions options = null)
         {
             if (double.IsNaN(betaTarget)) throw new ArgumentException("The target beta is not a number.");
+            MemberCheckOptions opt = options ?? MemberCheckOptions.Default();
 
             Func<MemberReliabilityResult, MemberAssessment> toAssessment = r =>
             {
@@ -746,7 +751,7 @@ namespace Propability_NTNU_v1.Classes.Reliability
                             a.Note[m] = MemberLimitStateResult.ModeName(row.Mode) + ": FORM did not converge";
                         }
                     }
-                    if (!any) continue;                         // no axial force: nothing to verify
+                    if (!any) continue;                         // not stressed: nothing to verify
 
                     MemberLimitStateResult g = r.Governing[m];
                     if (g != null)
@@ -761,19 +766,19 @@ namespace Propability_NTNU_v1.Classes.Reliability
             SectionOptimisationResult res = Run(
                 mdl, candidates, groupOfMember,
                 trial => toAssessment(MemberReliability.Run(trial, vars, bindings, correlation, bucklingLengths,
-                                                            maxIterations, false, -1)),
+                                                            maxIterations, false, -1, opt)),
                 "beta >= " + betaTarget.ToString("0.00##", CultureInfo.InvariantCulture) +
-                " in every member (the system beta is reported, not constrained)",
+                " in every member (the system beta is reported, not constrained); members checked for " + opt.Describe(),
                 true, exchangeDepth, maxEvaluations);
 
             // the final design once more, now with the system reliability, and the input model for comparison
             res.Final = toAssessment(MemberReliability.Run(res.Model, vars, bindings, correlation, bucklingLengths,
-                                                           maxIterations, false, Math.Max(0, systemSamples)));
+                                                           maxIterations, false, Math.Max(0, systemSamples), opt));
             res.Warnings.AddRange(res.Final.Reliability.Warnings);
 
             res.ReliabilityOptimised = res.Final.Reliability;
             res.ReliabilityInitial = MemberReliability.Run(mdl, vars, bindings, correlation, bucklingLengths,
-                                                           maxIterations, false, Math.Max(0, systemSamples));
+                                                           maxIterations, false, Math.Max(0, systemSamples), opt);
             res.BetaTarget = betaTarget;
             return res;
         }
@@ -791,13 +796,15 @@ namespace Propability_NTNU_v1.Classes.Reliability
             double maxUtilisation = 1.0,
             EcFactors factors = null,
             int exchangeDepth = DefaultExchangeDepth,
-            int maxEvaluations = DefaultMaxEvaluations)
+            int maxEvaluations = DefaultMaxEvaluations,
+            MemberCheckOptions options = null)
         {
             if (!(maxUtilisation > 0.0)) throw new ArgumentException("The utilisation limit must be positive.");
+            MemberCheckOptions opt = options ?? MemberCheckOptions.Default();
 
             Func<TB_Model, MemberAssessment> assess = trial =>
             {
-                EcCheckResult r = EurocodeMemberCheck.Run(trial, loadCases, bucklingLengths, factors);
+                EcCheckResult r = EurocodeMemberCheck.Run(trial, loadCases, bucklingLengths, factors, opt);
                 int n = r.Members.Count;
                 var a = new MemberAssessment { Ok = new bool[n], Value = new double[n], Note = new string[n], Eurocode = r };
                 for (int m = 0; m < n; m++)
@@ -811,12 +818,13 @@ namespace Propability_NTNU_v1.Classes.Reliability
 
             SectionOptimisationResult res = Run(
                 mdl, candidates, groupOfMember, assess,
-                "Eurocode utilisation <= " + maxUtilisation.ToString("0.00##", CultureInfo.InvariantCulture) + " in every member",
+                "Eurocode utilisation <= " + maxUtilisation.ToString("0.00##", CultureInfo.InvariantCulture) +
+                " in every member; members checked for " + opt.Describe(),
                 false, exchangeDepth, maxEvaluations);
             res.Warnings.AddRange(res.Final.Eurocode.Warnings);
 
             res.EurocodeOptimised = res.Final.Eurocode;
-            res.EurocodeInitial = EurocodeMemberCheck.Run(mdl, loadCases, bucklingLengths, factors);
+            res.EurocodeInitial = EurocodeMemberCheck.Run(mdl, loadCases, bucklingLengths, factors, opt);
             return res;
         }
 
@@ -835,15 +843,16 @@ namespace Propability_NTNU_v1.Classes.Reliability
             double[,] correlation = null,
             IDictionary<string, double[]> bucklingLengths = null,
             int maxIterations = 300,
-            int systemSamples = SystemReliability.DefaultSamples)
+            int systemSamples = SystemReliability.DefaultSamples,
+            MemberCheckOptions options = null)
         {
             if (res == null || res.Model == null) throw new ArgumentNullException(nameof(res));
             if (initial == null) throw new ArgumentNullException(nameof(initial));
 
             res.ReliabilityInitial = MemberReliability.Run(initial, vars, bindings, correlation, bucklingLengths,
-                                                           maxIterations, false, Math.Max(0, systemSamples));
+                                                           maxIterations, false, Math.Max(0, systemSamples), options);
             res.ReliabilityOptimised = MemberReliability.Run(res.Model, vars, bindings, correlation, bucklingLengths,
-                                                             maxIterations, false, Math.Max(0, systemSamples));
+                                                             maxIterations, false, Math.Max(0, systemSamples), options);
             res.BetaTarget = betaTarget;
         }
 

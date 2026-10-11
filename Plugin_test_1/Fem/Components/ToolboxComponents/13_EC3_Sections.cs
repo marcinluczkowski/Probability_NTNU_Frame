@@ -56,7 +56,7 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
                 "Optional: names of the sections of the table that may be used. Default: all I-shaped sections.",
                 GH_ParamAccess.list);
             pManager.AddTextParameter("Buckling Lengths", "Lcr",
-                "Optional, one per line: \"<tag>:<Lcr,y>:<Lcr,z>\" in metres. Default: the element length.",
+                "Optional, one per line: \"<tag>:<Lcr,y>:<Lcr,z>[:<L,LT>]\" in metres (L,LT = length between lateral restraints for lateral-torsional buckling, default Lcr,z). Default: the element length.",
                 GH_ParamAccess.list);
             pManager.AddNumberParameter("Max Utilisation", "Umax",
                 "Utilisation that no member may exceed.", GH_ParamAccess.item, 1.0);
@@ -74,6 +74,10 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
                 "Optional, one per line: \"i,j,rho\" using 0-based variable indices.", GH_ParamAccess.list);
             pManager.AddNumberParameter("Target Beta", "Bt",
                 "Target reliability index; only used to count the members below it in the Report.", GH_ParamAccess.item, 3.8);
+            pManager.AddBooleanParameter("Bending", "Bend",
+                "true (default): members are checked for the axial force AND the bending moments from the rigid " +
+                "joints (EN 1993-1-1 6.2.1(7), 6.3.3 with Annex B, lateral-torsional buckling; elastic, Cm >= 0.9, " +
+                "as Karamba3D's defaults). false: axial force only.", GH_ParamAccess.item, true);
 
             for (int i = 2; i < pManager.ParamCount; i++) pManager[i].Optional = true;
         }
@@ -91,18 +95,19 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             pManager.AddNumberParameter("Max Utilisation", "Umax", "Highest member utilisation.", GH_ParamAccess.item);
             pManager.AddBooleanParameter("Feasible", "OK", "True if every member is within the limit.", GH_ParamAccess.item);
             pManager.AddTextParameter("Report", "Rep", "The search, the result per group, and before and after.", GH_ParamAccess.item);
-            pManager.AddNumberParameter("Initial Weight", "Initial Weight",
+            pManager.AddNumberParameter("Initial Weight", "W0",
                 "Weight of the input model, with the sections it came with [kg].", GH_ParamAccess.item);
-            pManager.AddNumberParameter("Implied Beta", "Implied Beta",
+            pManager.AddNumberParameter("Implied Beta", "B",
                 "Implied reliability index of each member of the Eurocode design (NaN: no axial force, or no random variables).",
                 GH_ParamAccess.list);
-            pManager.AddNumberParameter("Initial Implied Beta", "Beta0 Unoptimized",
+            pManager.AddNumberParameter("Initial Implied Beta", "B0",
                 "Implied reliability index of each member of the input model.", GH_ParamAccess.list);
             pManager.AddNumberParameter("Implied Min Beta", "Bmin", "Lowest implied member reliability index of the Eurocode design.", GH_ParamAccess.item);
-            //pManager.AddNumberParameter("Initial Implied Min Beta", "Bmin0", "Lowest implied member reliability index of the input model.", GH_ParamAccess.item);
+            pManager.AddNumberParameter("Initial Implied Min Beta", "Bmin0", "Lowest implied member reliability index of the input model.", GH_ParamAccess.item);
             pManager.AddNumberParameter("Implied System Beta", "Bsys",
                 "Implied reliability index of the Eurocode design as a series system.", GH_ParamAccess.item);
-            //pManager.AddNumberParameter("Initial Implied System Beta", "Bsys0", "Implied reliability index of the input model as a series system.", GH_ParamAccess.item);
+            pManager.AddNumberParameter("Initial Implied System Beta", "Bsys0",
+                "Implied reliability index of the input model as a series system.", GH_ParamAccess.item);
         }
 
         protected override void SolveInstance(IGH_DataAccess DA)
@@ -134,6 +139,9 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             DA.GetDataList(9, bindSpecs);
             DA.GetDataList(10, corrSpecs);
             DA.GetData(11, ref betaTarget);
+            bool bending = true;
+            DA.GetData(12, ref bending);
+            MemberCheckOptions options = bending ? MemberCheckOptions.Default() : MemberCheckOptions.AxialOnly();
 
             if (gh_mdl == null || gh_mdl.Value == null)
             {
@@ -191,9 +199,11 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             try
             {
                 res = SectionOptimiser.RunEurocode(mdl, candidates, groups, loadCases, lcr, maxUtil, null,
-                                                   Math.Max(0, exchangeDepth));
+                                                   Math.Max(0, exchangeDepth), SectionOptimiser.DefaultMaxEvaluations,
+                                                   options);
                 if (vars.Count > 0)
-                    SectionOptimiser.AddImpliedReliability(res, mdl, vars, bindings, betaTarget, rho, lcr);
+                    SectionOptimiser.AddImpliedReliability(res, mdl, vars, bindings, betaTarget, rho, lcr,
+                                                           300, SystemReliability.DefaultSamples, options);
             }
             catch (Exception ex)
             {
@@ -234,9 +244,9 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             DA.SetDataList(10, GoverningBetas(after));
             DA.SetDataList(11, GoverningBetas(before));
             DA.SetData(12, after != null ? after.MinBeta : double.NaN);
-            //DA.SetData(12, before != null ? before.MinBeta : double.NaN);
-            DA.SetData(13, (after != null && after.SystemResult != null) ? after.SystemResult.BetaSystem : double.NaN);
-            //DA.SetData(13, (before != null && before.SystemResult != null) ? before.SystemResult.BetaSystem : double.NaN);
+            DA.SetData(13, before != null ? before.MinBeta : double.NaN);
+            DA.SetData(14, (after != null && after.SystemResult != null) ? after.SystemResult.BetaSystem : double.NaN);
+            DA.SetData(15, (before != null && before.SystemResult != null) ? before.SystemResult.BetaSystem : double.NaN);
         }
 
         /// <summary>Beta of the governing limit state of each member; NaN where there is none.</summary>
@@ -289,13 +299,14 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
                 if (string.IsNullOrWhiteSpace(s)) continue;
 
                 string[] t = s.Split(':');
-                double ly, lz;
-                if (t.Length < 3 ||
+                double ly, lz, llt = 0.0;
+                if (t.Length < 3 || t.Length > 4 ||
                     !double.TryParse(t[1].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out ly) ||
-                    !double.TryParse(t[2].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out lz))
-                    throw new ArgumentException($"Buckling length '{s}': expected \"<tag>:<Lcr,y>:<Lcr,z>\" in metres.");
+                    !double.TryParse(t[2].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out lz) ||
+                    (t.Length == 4 && !double.TryParse(t[3].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out llt)))
+                    throw new ArgumentException($"Buckling length '{s}': expected \"<tag>:<Lcr,y>:<Lcr,z>[:<L,LT>]\" in metres.");
 
-                target[t[0].Trim()] = new[] { ly, lz };
+                target[t[0].Trim()] = (t.Length == 4) ? new[] { ly, lz, llt } : new[] { ly, lz };
             }
         }
 

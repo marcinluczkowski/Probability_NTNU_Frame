@@ -18,6 +18,10 @@
 //
 //      dN_e/dp_i = (ds_e/dp_i) q_e . u_e  +  s_e q_e . du_e/dp_i
 //
+//  The same holds for every other end force of the element (shear forces and the
+//  bending moments from the rigid joints): f_r = s_e q_e,r . u_e, see
+//  LocalEndForceGradient. The moments are what the N+M interaction check needs.
+//
 //  This is the DIRECT form: one solve per parameter gives the derivatives of ALL
 //  member forces. (NL_DDM uses the adjoint form, one solve per response, which is
 //  the better choice for a single displacement response but not for many members.)
@@ -342,6 +346,66 @@ namespace Propability_NTNU_v1.Classes.Toolbox
             double[] f = new double[12];
             for (int r = 0; r < 12; r++) f[r] = s * RowDot(_q[k], r, U, k);
             return f;
+        }
+
+        /// <summary>
+        /// Derivatives of the local end forces of element k at the last evaluated point,
+        /// [row of the end-force vector][parameter], same layout and units as LocalEndForces:
+        ///     d f_r / d p_i = (ds/dp_i) q_r . u  +  s q_r . du/dp_i
+        /// from the same direct-differentiation solves as dN (no extra solve). Only the rows in
+        /// 'rows' are filled; the others are null.
+        /// </summary>
+        public double[][] LocalEndForceGradient(int k, IList<int> rows)
+        {
+            if (U == null || dU == null) throw new InvalidOperationException("Call Evaluate first.");
+
+            double s = ModulusScale(k, _lastP);
+            double[][] g = new double[12][];
+            foreach (int r in rows)
+            {
+                g[r] = new double[NPar];
+                for (int ip = 0; ip < NPar; ip++)
+                {
+                    double v = s * RowDot(_q[k], r, dU[ip], k);
+                    if (_modPar[k] == ip) v += RowDot(_q[k], r, U, k) / _e0[k];
+                    g[r][ip] = v;
+                }
+            }
+            return g;
+        }
+
+        /// <summary>
+        /// Local end forces of every element by central finite differences, [element][row][parameter].
+        /// For checking LocalEndForceGradient only. The stored state (U, N, dU, dN) is not changed.
+        /// </summary>
+        public double[][][] FiniteDifference_dF(double[] p, double relStep = 1e-6)
+        {
+            var fd = new double[NElem][][];
+            for (int k = 0; k < NElem; k++)
+            {
+                fd[k] = new double[12][];
+                for (int r = 0; r < 12; r++) fd[k][r] = new double[NPar];
+            }
+
+            for (int ip = 0; ip < NPar; ip++)
+            {
+                double h = relStep * Math.Max(Math.Max(Math.Abs(p[ip]), Math.Abs(Baseline[ip])), 1e-12);
+                double[] pPlus = (double[])p.Clone(); pPlus[ip] += h;
+                double[] pMinus = (double[])p.Clone(); pMinus[ip] -= h;
+
+                double[] uPlus, uMinus, nTmp;
+                double[][] a, b;
+                Compute(pPlus, false, out uPlus, out nTmp, out a, out b);
+                Compute(pMinus, false, out uMinus, out nTmp, out a, out b);
+
+                for (int k = 0; k < NElem; k++)
+                {
+                    double sp = ModulusScale(k, pPlus), sm = ModulusScale(k, pMinus);
+                    for (int r = 0; r < 12; r++)
+                        fd[k][r][ip] = (sp * RowDot(_q[k], r, uPlus, k) - sm * RowDot(_q[k], r, uMinus, k)) / (2.0 * h);
+                }
+            }
+            return fd;
         }
 
         /// <summary>The solve itself. With withSensitivity = false only u and n are computed.</summary>

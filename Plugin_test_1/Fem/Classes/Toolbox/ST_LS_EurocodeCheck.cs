@@ -11,7 +11,7 @@
 //  ACTIONS (EN 1990 with the Norwegian NA, table NA.A1.2(B), STR)
 //  The loads in the model are the CHARACTERISTIC loads, one load case per action.
 //  Every load case is declared permanent (G) or variable (Q, with its psi0).
-//  For each member the design axial force is the less favourable of
+//  Axial only: for each member the design axial force is the less favourable of
 //
 //    (6.10a)   sum gammaG Gk  +  sum gammaQ psi0 Qk
 //    (6.10b)   sum xi gammaG Gk  +  gammaQ Qk,1  +  sum gammaQ psi0,i Qk,i
@@ -26,14 +26,22 @@
 //  Each permanent load case is treated as one source (EN 1990 table A1.2(B),
 //  note 3): all its loads get the same factor.
 //
-//  RESISTANCE (EN 1993-1-1 with the Norwegian NA)
+//  RESISTANCE (EN 1993-1-1 with the Norwegian NA), WITH BENDING (default)
+//  The axial force and the end moments from the rigid joints, checked by
+//  MemberInteraction (ST_LS_MemberInteraction.cs): cross-section 6.2.1(7) and
+//  member buckling 6.3.3 (6.61, 6.62) with Annex B and lateral-torsional buckling.
+//  N and the moments of one combination act together, so "unfavourable" is not
+//  known in advance: every choice of factors in (6.10a) and (6.10b) is tried
+//  (CombinationsOf) and the worst is kept for each check.
+//
+//  RESISTANCE, AXIAL ONLY (MemberCheckOptions.Bending = false)
 //    tension             N_pl,Rd = A fy / gammaM0                   (6.2.3)
 //    flexural buckling   N_b,Rd  = chi A fy / gammaM1, about y and z (6.3.1)
 //  with the nominal fy and E of the material. chi, the slenderness, the buckling
 //  lengths and the imperfection factors are the ones the limit states use.
 //
-//  NOT CHECKED: net-section fracture (N_u,Rd), class 4 sections (a warning is
-//  given), and the bending from the rigid joints - exactly as in the limit states.
+//  NOT CHECKED: net-section fracture (N_u,Rd), shear and torsion, class 4 sections
+//  (a warning is given) - exactly as in the limit states.
 //
 //  UNITS: forces [N], A [mm2], fy and E [N/mm2], lengths [m].
 // =============================================================================
@@ -149,6 +157,12 @@ namespace Propability_NTNU_v1.Classes.Reliability
         /// <summary>Slenderness and reduction factor. NaN for tension.</summary>
         public double LambdaBar = double.NaN;
         public double Chi = double.NaN;
+        /// <summary>With bending: largest design end moments about y and z [N.m] and chi_LT (NaN where not used).</summary>
+        public double MyEd = 0.0;
+        public double MzEd = 0.0;
+        public double ChiLT = double.NaN;
+        /// <summary>With bending: the expression that governed ("6.2.1(7)", "6.61", "6.62").</summary>
+        public string Clause = "";
     }
 
     public class EcCheckResult
@@ -156,6 +170,8 @@ namespace Propability_NTNU_v1.Classes.Reliability
         public List<MemberData> Members = new List<MemberData>();
         public List<EcLoadCase> LoadCases = new List<EcLoadCase>();
         public EcFactors Factors = new EcFactors();
+        /// <summary>How the members were checked (axial only, or axial force + bending).</summary>
+        public MemberCheckOptions Options = MemberCheckOptions.Default();
         /// <summary>Axial force of each member under each load case as modelled [N], [member][load case].</summary>
         public double[][] NChar = new double[0][];
         /// <summary>Every check that was made, in member order.</summary>
@@ -178,14 +194,19 @@ namespace Propability_NTNU_v1.Classes.Reliability
             foreach (EcLoadCase lc in LoadCases)
                 sb.AppendLine("  LC" + lc.LoadCase.ToString(ci) + " : " + lc.ToString());
             sb.AppendLine();
-            sb.AppendLine("Combinations: the less favourable of (6.10a) and (6.10b) for each member.");
+            sb.AppendLine("Members checked for " + Options.Describe() + ".");
+            sb.AppendLine(Options.Bending
+                ? "Combinations: (6.10a) and (6.10b) with every choice of favourable / unfavourable factors; the worst per check."
+                : "Combinations: the less favourable of (6.10a) and (6.10b) for each member.");
             sb.AppendLine("  gammaG " + Factors.GammaG.ToString("0.00", ci) + " / " + Factors.GammaGInf.ToString("0.00", ci) +
                           ", xi " + Factors.Xi.ToString("0.00", ci) + ", gammaQ " + Factors.GammaQ.ToString("0.00", ci) +
                           ", gammaM0 " + Factors.GammaM0.ToString("0.00", ci) + ", gammaM1 " + Factors.GammaM1.ToString("0.00", ci));
             sb.AppendLine();
 
-            sb.AppendLine("Checks (N tension positive):");
-            sb.AppendLine("  member            mode       NEd [kN]  NRd [kN]   lambda     chi     util   combination");
+            sb.AppendLine("Checks (N tension positive" + (Options.Bending ? "; My, Mz = largest design end moments" : "") + "):");
+            sb.AppendLine(Options.Bending
+                ? "  member            mode       NEd [kN]  NRd [kN]  My [kNm]  Mz [kNm]   lambda     chi  chi_LT  clause     util   combination"
+                : "  member            mode       NEd [kN]  NRd [kN]   lambda     chi     util   combination");
             foreach (EcMemberCheck c in Checks)
             {
                 string name = "[" + c.Member.ToString(ci) + "] " + c.Tag;
@@ -193,8 +214,18 @@ namespace Propability_NTNU_v1.Classes.Reliability
                 sb.Append(MemberLimitStateResult.ModeName(c.Mode).PadRight(10) + " ");
                 sb.Append((c.NEd * 1e-3).ToString("F1", ci).PadLeft(8) + "  ");
                 sb.Append((c.NRd * 1e-3).ToString("F1", ci).PadLeft(8) + " ");
+                if (Options.Bending)
+                {
+                    sb.Append((c.MyEd * 1e-3).ToString("F2", ci).PadLeft(9) + " ");
+                    sb.Append((c.MzEd * 1e-3).ToString("F2", ci).PadLeft(9) + " ");
+                }
                 sb.Append((double.IsNaN(c.LambdaBar) ? "-" : c.LambdaBar.ToString("F3", ci)).PadLeft(8) + " ");
                 sb.Append((double.IsNaN(c.Chi) ? "-" : c.Chi.ToString("F3", ci)).PadLeft(7) + " ");
+                if (Options.Bending)
+                {
+                    sb.Append((double.IsNaN(c.ChiLT) ? "-" : c.ChiLT.ToString("F3", ci)).PadLeft(7) + "  ");
+                    sb.Append(c.Clause.PadRight(8) + " ");
+                }
                 sb.Append(c.Utilisation.ToString("F3", ci).PadLeft(8) + "   ");
                 sb.AppendLine(c.Combination);
             }
@@ -219,10 +250,14 @@ namespace Propability_NTNU_v1.Classes.Reliability
             for (int m = 0; m < Governing.Length; m++)
                 if (Governing[m] == null) unloaded++;
             if (unloaded > 0)
-                sb.AppendLine(unloaded.ToString(ci) + " member(s) are not stressed axially by any combination and are not checked.");
+                sb.AppendLine(unloaded.ToString(ci) + (Options.Bending
+                    ? " member(s) are not stressed by any combination and are not checked."
+                    : " member(s) are not stressed axially by any combination and are not checked."));
 
             sb.AppendLine();
-            sb.AppendLine("The check uses the axial force only (as the reliability limit states do).");
+            sb.AppendLine(Options.Bending
+                ? "The check includes the bending moments from the rigid joints (as the reliability limit states do)."
+                : "The check uses the axial force only (as the reliability limit states do).");
 
             if (Warnings.Count > 0)
             {
@@ -245,7 +280,8 @@ namespace Propability_NTNU_v1.Classes.Reliability
             TB_Model mdl,
             IList<EcLoadCase> loadCases,
             IDictionary<string, double[]> bucklingLengths = null,
-            EcFactors factors = null)
+            EcFactors factors = null,
+            MemberCheckOptions options = null)
         {
             if (mdl == null) throw new ArgumentNullException(nameof(mdl));
             if (loadCases == null || loadCases.Count == 0)
@@ -283,7 +319,7 @@ namespace Propability_NTNU_v1.Classes.Reliability
                     Reference = 1.0
                 });
 
-            var ls = new LS_MemberLimitStates(mdl, variables, bucklingLengths);
+            var ls = new LS_MemberLimitStates(mdl, variables, bucklingLengths, options);
             int nMem = ls.Members.Count;
             int nLc = loadCases.Count;
 
@@ -292,11 +328,18 @@ namespace Propability_NTNU_v1.Classes.Reliability
                 throw new InvalidOperationException("The model could not be evaluated.");
 
             var res = new EcCheckResult();
+            res.Options = ls.Options;
             res.Members = ls.Members;
             res.LoadCases = loadCases.ToList();
             res.Factors = f;
             res.NChar = new double[nMem][];
             res.Governing = new EcMemberCheck[nMem];
+
+            if (ls.Options.Bending)
+            {
+                RunWithBending(mdl, ls, res, f);
+                return res;
+            }
 
             int class4 = 0;
 
@@ -378,6 +421,159 @@ namespace Propability_NTNU_v1.Classes.Reliability
                 res.Warnings.Add(class4.ToString(CultureInfo.InvariantCulture) +
                                  " compressed member(s) have a class 4 section. The gross area was used; the effective area is not implemented.");
             return res;
+        }
+
+        /// <summary>
+        /// The check with bending: for every member and every combination of CombinationsOf, the
+        /// design end forces (N and the end moments, superposed from the single load cases) go into
+        /// MemberInteraction.Utilisation with gammaM0 and gammaM1. A combination with a tensile (or
+        /// zero) design force is checked in tension, one with a compressive force in compression
+        /// (cross-section) and buckling about y and z. The worst combination is kept per check.
+        /// </summary>
+        private static void RunWithBending(TB_Model mdl, LS_MemberLimitStates ls, EcCheckResult res, EcFactors f)
+        {
+            int nMem = ls.Members.Count;
+            int nLc = res.LoadCases.Count;
+            List<KeyValuePair<string, double[]>> combos = CombinationsOf(res.LoadCases, f);
+            var order = new[] { MemberMode.Tension, MemberMode.Compression, MemberMode.BucklingY, MemberMode.BucklingZ };
+            int class4 = 0;
+
+            for (int m = 0; m < nMem; m++)
+            {
+                MemberData md = ls.Members[m];
+                double tolN = MemberReliability.ZeroForce * md.Fy0 * md.A;               // [N]
+                double tolM = MemberReliability.ZeroForce * md.Fy0 * md.Wy * 1e-3;       // [N.m]
+
+                // end forces of the single load cases (the variables are multipliers with reference 1)
+                double[][] dF = ls.Fe.LocalEndForceGradient(m, EndForces.Rows);
+                var fk = new EndForces[nLc];
+                for (int i = 0; i < nLc; i++)
+                    for (int j = 0; j < 5; j++) { EndForces e = fk[i]; e[j] = dF[EndForces.Rows[j]][i]; fk[i] = e; }
+
+                double[] nk = new double[nLc];
+                for (int i = 0; i < nLc; i++) nk[i] = fk[i].N;
+                res.NChar[m] = nk;
+
+                var best = new Dictionary<MemberMode, EcMemberCheck>();
+                foreach (KeyValuePair<string, double[]> combo in combos)
+                {
+                    EndForces fd = new EndForces();
+                    for (int i = 0; i < nLc; i++)
+                        for (int j = 0; j < 5; j++) fd[j] = fd[j] + combo.Value[i] * fk[i][j];
+
+                    MemberMode[] modes;
+                    if (fd.N < -tolN) modes = new[] { MemberMode.Compression, MemberMode.BucklingY, MemberMode.BucklingZ };
+                    else if (fd.N > tolN || fd.MyMax > tolM || fd.MzMax > tolM) modes = new[] { MemberMode.Tension };
+                    else continue;                                                       // nothing to check
+
+                    foreach (MemberMode mode in modes)
+                    {
+                        var d = new InteractionDetail();
+                        double u = MemberInteraction.Utilisation(md, fd, md.Fy0, md.E0, md.G0,
+                            1.0 / f.GammaM0, 1.0 / f.GammaM1, ls.Options, mode, d);
+
+                        EcMemberCheck c;
+                        if (best.TryGetValue(mode, out c) && !(u > c.Utilisation)) continue;
+
+                        c = new EcMemberCheck
+                        {
+                            Member = m, Tag = md.Tag, Mode = mode,
+                            NEd = fd.N,
+                            Utilisation = u,
+                            MyEd = fd.MyMax, MzEd = fd.MzMax,
+                            Combination = combo.Key,
+                            Factors = (double[])combo.Value.Clone(),
+                            Clause = d.Governing,
+                            ChiLT = d.ChiLT
+                        };
+                        if (mode == MemberMode.BucklingY || mode == MemberMode.BucklingZ)
+                        {
+                            bool aboutY = (mode == MemberMode.BucklingY);
+                            c.LambdaBar = aboutY ? d.LambdaY : d.LambdaZ;
+                            c.Chi = aboutY ? d.ChiY : d.ChiZ;
+                            c.NRd = c.Chi * md.A * md.Fy0 / f.GammaM1;
+                        }
+                        else
+                        {
+                            c.NRd = md.A * md.Fy0 / f.GammaM0;
+                        }
+                        best[mode] = c;
+                    }
+                }
+
+                EcMemberCheck governing = null;
+                foreach (MemberMode mode in order)
+                {
+                    EcMemberCheck c;
+                    if (!best.TryGetValue(mode, out c)) continue;
+                    res.Checks.Add(c);
+                    if (governing == null || c.Utilisation > governing.Utilisation) governing = c;
+                }
+                if (best.ContainsKey(MemberMode.Compression) && IsClass4InCompression(mdl.Elem1Ds[m].Sec)) class4++;
+
+                res.Governing[m] = governing;
+                if (governing != null && (res.CriticalMember < 0 || governing.Utilisation > res.MaxUtilisation))
+                {
+                    res.CriticalMember = m;
+                    res.MaxUtilisation = governing.Utilisation;
+                }
+            }
+
+            int assumed = ls.Members.Count(mem => mem.AssumedBucklingCurve);
+            if (assumed > 0)
+                res.Warnings.Add(assumed.ToString(CultureInfo.InvariantCulture) +
+                                 " member(s) have a section without buckling data: i = sqrt(I/A) and buckling curve c were assumed.");
+            if (class4 > 0)
+                res.Warnings.Add(class4.ToString(CultureInfo.InvariantCulture) +
+                                 " compressed member(s) have a class 4 section. The gross properties were used; effective properties are not implemented.");
+            int noLtb = ls.Members.Count(mem => !mem.OpenSection);
+            if (noLtb > 0 && ls.Options.LateralTorsional)
+                res.Warnings.Add(noLtb.ToString(CultureInfo.InvariantCulture) +
+                                 " member(s) do not have an I-section: no lateral-torsional buckling (chi_LT = 1).");
+        }
+
+        /// <summary>
+        /// Every combination of EN 1990 (6.10a) and (6.10b) for the declared load cases: each
+        /// permanent load case unfavourable (gammaG, or xi gammaG in 6.10b) or favourable
+        /// (gammaG,inf); each variable load case absent or accompanying (gammaQ psi0); in (6.10b)
+        /// each variable load case in turn the leading one (gammaQ). With N and moments together
+        /// "unfavourable" is not known in advance, so all choices are tried.
+        /// </summary>
+        public static List<KeyValuePair<string, double[]>> CombinationsOf(IList<EcLoadCase> lcs, EcFactors f)
+        {
+            int n = lcs.Count;
+            if (n > 14)
+                throw new ArgumentException("With bending, at most 14 load cases can be combined (every factor choice is tried).");
+
+            var perm = new List<int>();
+            var vari = new List<int>();
+            for (int i = 0; i < n; i++)
+                if (lcs[i].Action == EcAction.Permanent) perm.Add(i); else vari.Add(i);
+
+            var list = new List<KeyValuePair<string, double[]>>();
+            for (int eq = 0; eq < 2; eq++)
+            {
+                bool b = (eq == 1);
+                var leads = new List<int>();
+                if (b && vari.Count > 0) leads.AddRange(vari); else leads.Add(-1);
+
+                foreach (int lead in leads)
+                {
+                    List<int> acc = vari.Where(i => i != lead).ToList();
+                    for (int pm = 0; pm < (1 << perm.Count); pm++)
+                        for (int am = 0; am < (1 << acc.Count); am++)
+                        {
+                            double[] fac = new double[n];
+                            for (int k = 0; k < perm.Count; k++)
+                                fac[perm[k]] = ((pm >> k) & 1) == 1 ? (b ? f.Xi * f.GammaG : f.GammaG) : f.GammaGInf;
+                            for (int k = 0; k < acc.Count; k++)
+                                fac[acc[k]] = ((am >> k) & 1) == 1 ? f.GammaQ * lcs[acc[k]].Psi0 : 0.0;
+                            if (lead >= 0) fac[lead] = f.GammaQ;
+                            list.Add(new KeyValuePair<string, double[]>((b ? "6.10b: " : "6.10a: ") + Describe(fac, lcs), fac));
+                        }
+                }
+            }
+            return list;
         }
 
         /// <summary>

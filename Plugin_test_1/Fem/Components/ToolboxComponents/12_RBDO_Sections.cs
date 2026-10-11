@@ -59,7 +59,7 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             pManager.AddTextParameter("Correlations", "Corr",
                 "Optional, one per line: \"i,j,rho\" using 0-based variable indices.", GH_ParamAccess.list);
             pManager.AddTextParameter("Buckling Lengths", "Lcr",
-                "Optional, one per line: \"<tag>:<Lcr,y>:<Lcr,z>\" in metres. Default: the element length.",
+                "Optional, one per line: \"<tag>:<Lcr,y>:<Lcr,z>[:<L,LT>]\" in metres (L,LT = length between lateral restraints for lateral-torsional buckling, default Lcr,z). Default: the element length.",
                 GH_ParamAccess.list);
             pManager.AddIntegerParameter("Max Iterations", "MaxIt",
                 "Maximum HL-RF iterations per limit state.", GH_ParamAccess.item, 300);
@@ -70,6 +70,10 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
                 "After the stepping search, this many groups at a time are made one size heavier to see whether " +
                 "the others can then become lighter. 0 = off, 1 = one group at a time, 2 = also every pair of " +
                 "groups (finds more, but slow with many groups).", GH_ParamAccess.item, SectionOptimiser.DefaultExchangeDepth);
+            pManager.AddBooleanParameter("Bending", "Bend",
+                "true (default): members are checked for the axial force AND the bending moments from the rigid " +
+                "joints (EN 1993-1-1 6.2.1(7), 6.3.3 with Annex B, lateral-torsional buckling; elastic, Cm >= 0.9, " +
+                "as Karamba3D's defaults). false: axial force only.", GH_ParamAccess.item, true);
 
             for (int i = 3; i < pManager.ParamCount; i++) pManager[i].Optional = true;
         }
@@ -90,12 +94,13 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
                 GH_ParamAccess.item);
             pManager.AddBooleanParameter("Feasible", "OK", "True if every member reaches the target.", GH_ParamAccess.item);
             pManager.AddTextParameter("Report", "Rep", "The search, the result per group and the system reliability.", GH_ParamAccess.item);
-            pManager.AddNumberParameter("Initial Weight", "Initial Weight",
+            pManager.AddNumberParameter("Initial Weight", "W0",
                 "Weight of the input model, with the sections it came with [kg].", GH_ParamAccess.item);
-            pManager.AddNumberParameter("Initial Beta", "Initial Beta values",
+            pManager.AddNumberParameter("Initial Beta", "B0",
                 "Reliability index of each member of the input model (NaN: no axial force).", GH_ParamAccess.list);
-            //pManager.AddNumberParameter("Initial Min Beta", "Bmin0", "Lowest member reliability index of the input model.", GH_ParamAccess.item);
-            //pManager.AddNumberParameter("Initial System Beta", "Bsys0", "Reliability index of the input model as a series system.", GH_ParamAccess.item);
+            pManager.AddNumberParameter("Initial Min Beta", "Bmin0", "Lowest member reliability index of the input model.", GH_ParamAccess.item);
+            pManager.AddNumberParameter("Initial System Beta", "Bsys0",
+                "Reliability index of the input model as a series system.", GH_ParamAccess.item);
         }
 
         protected override void SolveInstance(IGH_DataAccess DA)
@@ -127,6 +132,9 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             DA.GetData(9, ref maxIt);
             DA.GetData(10, ref sysSamples);
             DA.GetData(11, ref exchangeDepth);
+            bool bending = true;
+            DA.GetData(12, ref bending);
+            MemberCheckOptions options = bending ? MemberCheckOptions.Default() : MemberCheckOptions.AxialOnly();
 
             if (gh_mdl == null || gh_mdl.Value == null)
             {
@@ -189,7 +197,8 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             {
                 res = SectionOptimiser.RunReliability(mdl, candidates, groups, vars, bindings, betaTarget,
                                                       rho, lcr, Math.Max(1, maxIt), Math.Max(0, sysSamples),
-                                                      Math.Max(0, exchangeDepth));
+                                                      Math.Max(0, exchangeDepth), SectionOptimiser.DefaultMaxEvaluations,
+                                                      options);
             }
             catch (Exception ex)
             {
@@ -232,8 +241,8 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             MemberReliabilityResult before = res.ReliabilityInitial;
             DA.SetData(10, res.WeightInitial);
             DA.SetDataList(11, GoverningBetas(before));
-            //DA.SetData(12, before != null ? before.MinBeta : double.NaN);
-            //DA.SetData(13, (before != null && before.SystemResult != null) ? before.SystemResult.BetaSystem : double.NaN);
+            DA.SetData(12, before != null ? before.MinBeta : double.NaN);
+            DA.SetData(13, (before != null && before.SystemResult != null) ? before.SystemResult.BetaSystem : double.NaN);
         }
 
         /// <summary>Beta of the governing limit state of each member; NaN where there is none.</summary>
@@ -286,13 +295,14 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
                 if (string.IsNullOrWhiteSpace(s)) continue;
 
                 string[] t = s.Split(':');
-                double ly, lz;
-                if (t.Length < 3 ||
+                double ly, lz, llt = 0.0;
+                if (t.Length < 3 || t.Length > 4 ||
                     !double.TryParse(t[1].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out ly) ||
-                    !double.TryParse(t[2].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out lz))
-                    throw new ArgumentException($"Buckling length '{s}': expected \"<tag>:<Lcr,y>:<Lcr,z>\" in metres.");
+                    !double.TryParse(t[2].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out lz) ||
+                    (t.Length == 4 && !double.TryParse(t[3].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out llt)))
+                    throw new ArgumentException($"Buckling length '{s}': expected \"<tag>:<Lcr,y>:<Lcr,z>[:<L,LT>]\" in metres.");
 
-                target[t[0].Trim()] = new[] { ly, lz };
+                target[t[0].Trim()] = (t.Length == 4) ? new[] { ly, lz, llt } : new[] { ly, lz };
             }
         }
 

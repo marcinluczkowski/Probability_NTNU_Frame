@@ -120,70 +120,56 @@ namespace Propability_NTNU_v1.Classes.Toolbox
             return weight;
         }
 
+        /// <summary>
+        /// Roll angle of the element about its axis, from the requested local z-direction.
+        /// Default (no z-direction given), as in Karamba3D:
+        ///   - non-vertical members: local z in the vertical plane through the member, pointing up,
+        ///     local y horizontal;
+        ///   - vertical members: local y parallel to the global Y-axis, local z = x cross y.
+        /// The angle is SIGNED (positive = rotation about the local x-axis), so a z-direction on
+        /// either side of the reference gives the right orientation.
+        /// </summary>
         private double Calc_Beta(Vector3d _vz)
         {
-            double beta; // = 0.0;
-            Vector3d vy0;
-            Vector3d vy;
-
             Vector3d vx = Line.UnitTangent;
+            bool vertical = Math.Abs(Line.ToX - Line.FromX) < Common.PRES &&
+                            Math.Abs(Line.ToY - Line.FromY) < Common.PRES;
+
             Vector3d vz = _vz;
-            // Rhino.RhinoApp.WriteLine("vx: " + vx.ToString());
-
-            if (_vz.IsValid == false || _vz.Length == 0)
+            bool given = _vz.IsValid && _vz.Length > 0 &&
+                         Vector3d.CrossProduct(_vz, vx).Length > 1e-9 * _vz.Length;          // not along the member
+            if (!given)
             {
-                // Rhino.RhinoApp.WriteLine("vz not valid: " + _vz.ToString());
-
-                if (Math.Abs(Line.ToX - Line.FromX) < Common.PRES &&
-                                Math.Abs(Line.ToY - Line.FromY) < Common.PRES)
-                {
-                    vz = Vector3d.YAxis;
-                }
-                else
-                {
-                    vy0 = Vector3d.CrossProduct(Vector3d.ZAxis, vx);
-                    vz = Vector3d.CrossProduct(vx, vy0);
-                }
-                    
+                vz = vertical
+                    ? Vector3d.CrossProduct(vx, Vector3d.YAxis)                               // local y = global Y
+                    : Vector3d.CrossProduct(vx, Vector3d.CrossProduct(Vector3d.ZAxis, vx));   // local z up
             }
 
-            // parallel to Z-Axis
-            if (Math.Abs(Line.ToX - Line.FromX) < Common.PRES &&
-                            Math.Abs(Line.ToY - Line.FromY) < Common.PRES)
-            {
-                vy0 = Vector3d.YAxis;
-                beta = Calc_Angle(vy0, vz);
-                vy = Vector3d.CrossProduct(vz, Vector3d.ZAxis);
-            }
-            // otherwise
+            // the part of vz perpendicular to the member
+            vz = vz - (vz * vx) * vx;
+            vz.Unitize();
+            Vector3d vy = Vector3d.CrossProduct(vz, vx);
+
+            // reference axes of Calc_TransMX at beta = 0, and the signed angle from them
+            double beta;
+            if (vertical)
+                beta = SignedAngle(Vector3d.YAxis, vz, vx);                                   // reference local z = global Y
             else
-            {
-                vy0 = Vector3d.CrossProduct(Vector3d.ZAxis, vx);
-                vy  = Vector3d.CrossProduct(vz, vx);
-                vz  = Vector3d.CrossProduct(vx, vy);
-                beta = Calc_Angle(vy0, vy);
-            }
+                beta = SignedAngle(Vector3d.CrossProduct(Vector3d.ZAxis, vx), vy, vx);        // reference local y horizontal
 
             Pln = new Plane(Line.From, vy, vz);
-
-
             return beta;
         }
 
-        private double Calc_Angle(Vector3d a, Vector3d b)
+        /// <summary>Angle from a to b, positive for a right-handed rotation about axis. Both perpendicular to axis.</summary>
+        private static double SignedAngle(Vector3d a, Vector3d b, Vector3d axis)
         {
             a.Unitize();
             b.Unitize();
-
-            double theta = Math.Acos(a.X * b.X + a.Y * b.Y + a.Z * b.Z);
-
-            if (double.IsNaN(theta))
-            {
-                theta = 0;
-            }
-
-
-            return theta;
+            double cos = a * b;
+            double sin = Vector3d.CrossProduct(a, b) * axis;
+            double theta = Math.Atan2(sin, cos);
+            return double.IsNaN(theta) ? 0.0 : theta;
         }
 
         public double[] Calc_Forces(int lc_id)

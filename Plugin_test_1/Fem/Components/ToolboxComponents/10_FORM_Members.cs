@@ -35,7 +35,8 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
         public ST_FORM_Members()
           : base("FORM Members", "FORM Mem",
               "FORM reliability analysis of every member of a linear-elastic truss model. " +
-              "Limit states: tension yield and flexural buckling about both axes. Gradients by DDM.",
+              "Limit states: tension, compression and flexural buckling about both axes, with the bending " +
+              "moments from the rigid joints (switch: Bending). Gradients by DDM.",
               Common.category, Common.sub_analize)
         {
         }
@@ -60,7 +61,7 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
                 "Optional, one per line: \"i,j,rho\" using 0-based variable indices.",
                 GH_ParamAccess.list);
             pManager.AddTextParameter("Buckling Lengths", "Lcr",
-                "Optional, one per line: \"<tag>:<Lcr,y>:<Lcr,z>\" in metres, for the members with this " +
+                "Optional, one per line: \"<tag>:<Lcr,y>:<Lcr,z>[:<L,LT>]\" in metres (L,LT = length between lateral restraints for lateral-torsional buckling, default Lcr,z), for the members with this " +
                 "element tag. Default: the element length about both axes.",
                 GH_ParamAccess.list);
             pManager.AddBooleanParameter("Check DDM", "Chk",
@@ -71,6 +72,10 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             pManager.AddIntegerParameter("System Samples", "Nsys",
                 "Number of samples of the importance sampling estimate of the system failure probability. " +
                 "0 = Ditlevsen bounds only.", GH_ParamAccess.item, SystemReliability.DefaultSamples);
+            pManager.AddBooleanParameter("Bending", "Bend",
+                "true (default): members are checked for the axial force AND the bending moments from the rigid " +
+                "joints (EN 1993-1-1 6.2.1(7), 6.3.3 with Annex B, lateral-torsional buckling; elastic, Cm >= 0.9, " +
+                "as Karamba3D's defaults). false: axial force only.", GH_ParamAccess.item, true);
 
             for (int i = 3; i < pManager.ParamCount; i++) pManager[i].Optional = true;
         }
@@ -79,8 +84,8 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
         {
             pManager.AddTextParameter("Tags", "Tag", "Element tag of each member, in model order.", GH_ParamAccess.list);
             pManager.AddTextParameter("Mode", "Mode",
-                "Governing limit state of each member: tension, buckling y or buckling z. " +
-                "\"no axial force\" for a member that no load case stresses axially (its Beta is NaN).", GH_ParamAccess.list);
+                "Governing limit state of each member: tension, compression, buckling y or buckling z. " +
+                "\"no axial force\" for a member that no load case stresses (its Beta is NaN).", GH_ParamAccess.list);
             pManager.AddNumberParameter("N", "N",
                 "Axial force of each member at the mean point [kN], tension positive.", GH_ParamAccess.list);
             pManager.AddNumberParameter("Beta", "B", "Reliability index of each member (governing limit state).", GH_ParamAccess.list);
@@ -91,7 +96,8 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             pManager.AddNumberParameter("Design Point", "X*",
                 "Design point in physical space, one branch per member.", GH_ParamAccess.tree);
             pManager.AddNumberParameter("Beta Modes", "Bm",
-                "One branch per member: beta for tension, buckling y, buckling z (NaN where not assessed).",
+                "One branch per member: beta for tension, buckling y, buckling z, compression (NaN where not assessed; " +
+                "compression only with Bending).",
                 GH_ParamAccess.tree);
             pManager.AddTextParameter("Names", "Name", "Variable names, in the order of Alpha and Design Point.", GH_ParamAccess.list);
             pManager.AddNumberParameter("Min Beta", "Bmin", "Lowest member reliability index.", GH_ParamAccess.item);
@@ -114,6 +120,7 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             bool checkDdm = false;
             int maxIt = 300;
             int sysSamples = SystemReliability.DefaultSamples;
+            bool bending = true;
 
             // --- input ---
             if (!DA.GetData(0, ref gh_mdl)) { return; }
@@ -124,6 +131,8 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             DA.GetData(5, ref checkDdm);
             DA.GetData(6, ref maxIt);
             DA.GetData(7, ref sysSamples);
+            DA.GetData(8, ref bending);
+            MemberCheckOptions options = bending ? MemberCheckOptions.Default() : MemberCheckOptions.AxialOnly();
 
             if (gh_mdl == null || gh_mdl.Value == null)
             {
@@ -180,7 +189,7 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             try
             {
                 res = MemberReliability.Run(mdl, vars, bindings, rho, lcr, Math.Max(1, maxIt), checkDdm,
-                                            Math.Max(0, sysSamples));
+                                            Math.Max(0, sysSamples), options);
             }
             catch (Exception ex)
             {
@@ -239,14 +248,14 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
                     }
                 }
 
-                // beta of each mode: tension, buckling y, buckling z
-                double[] bm = { double.NaN, double.NaN, double.NaN };
+                // beta of each mode: tension, buckling y, buckling z, compression
+                double[] bm = { double.NaN, double.NaN, double.NaN, double.NaN };
                 foreach (MemberLimitStateResult r in res.LimitStates)
                 {
                     if (r.Member != m || !r.HasBeta) continue;
                     bm[(int)r.Mode] = r.Form.Beta;
                 }
-                for (int i = 0; i < 3; i++) betaModes.Add(bm[i], path);
+                for (int i = 0; i < bm.Length; i++) betaModes.Add(bm[i], path);
             }
 
             // --- messages ---
@@ -337,13 +346,14 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
                 if (string.IsNullOrWhiteSpace(s)) continue;
 
                 string[] t = s.Split(':');
-                double ly, lz;
-                if (t.Length < 3 ||
+                double ly, lz, llt = 0.0;
+                if (t.Length < 3 || t.Length > 4 ||
                     !double.TryParse(t[1].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out ly) ||
-                    !double.TryParse(t[2].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out lz))
-                    throw new ArgumentException($"Buckling length '{s}': expected \"<tag>:<Lcr,y>:<Lcr,z>\" in metres.");
+                    !double.TryParse(t[2].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out lz) ||
+                    (t.Length == 4 && !double.TryParse(t[3].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out llt)))
+                    throw new ArgumentException($"Buckling length '{s}': expected \"<tag>:<Lcr,y>:<Lcr,z>[:<L,LT>]\" in metres.");
 
-                target[t[0].Trim()] = new[] { ly, lz };
+                target[t[0].Trim()] = (t.Length == 4) ? new[] { ly, lz, llt } : new[] { ly, lz };
             }
         }
 
