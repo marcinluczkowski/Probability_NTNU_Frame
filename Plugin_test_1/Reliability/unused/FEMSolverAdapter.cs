@@ -257,11 +257,12 @@ namespace Plugin_test_1.Reliability.FORM
         /// <summary>
         /// Combined axial + biaxial bending stress at both ends; returns the larger end.
         /// sigma = |N/A| + |My/Wy| + |Mz/Wz|, in MPa (N/mm^2).
+        /// Units: N [N] / A [mm2], and M [Nm] * 1000 / W [mm3].
         /// </summary>
         private static double ElementStress(TB_Element_1D elem, double[] forces)
         {
-            double n_i = forces[0], my_i = forces[4], mz_i = forces[5];
-            double n_j = forces[6], my_j = forces[10], mz_j = forces[11];
+            double n_i = forces[0], my_i = forces[4] * 1000, mz_i = forces[5] * 1000;
+            double n_j = forces[6], my_j = forces[10] * 1000, mz_j = forces[11] * 1000;
 
             double area = elem.Sec.Area, wy = elem.Sec.Wy, wz = elem.Sec.Wz;
 

@@ -132,9 +132,15 @@ namespace Plugin_test_1.Reliability.FORM
 
             // Reliability metrics
             sb.AppendLine("─ Reliability Metrics ─");
+            sb.AppendLine($"Reference period: {EurocodeConstants.ReferencePeriodsYears} year{(EurocodeConstants.ReferencePeriodsYears == 1 ? "" : "s")} (that of the variable-load distributions)");
             sb.AppendLine($"Reliability Index (β):        {Beta:F6}");
             sb.AppendLine($"Probability of Failure (Pf):  {ProbabilityOfFailure:E6}");
-            sb.AppendLine($"Annual Pf (assume 50-yr life): {1 - Math.Pow(1 - ProbabilityOfFailure, 50):E6}");
+            if (EurocodeConstants.ReferencePeriodsYears > 1)
+            {
+                double pfAnnual = AnnualProbabilityOfFailure();
+                sb.AppendLine($"Equivalent 1-year Pf: {pfAnnual:E6}");
+                sb.AppendLine($"Equivalent 1-year β:  {-Normal.InvCDF(0,1,pfAnnual):F6} (EN 1990 eq. C.3, independent years)");
+            }
             sb.AppendLine();
 
             // Most Probable Point (MPP) in X-space
@@ -198,6 +204,23 @@ namespace Plugin_test_1.Reliability.FORM
             }
 
             return sb.ToString();
+        }
+
+        /// <summary> 
+        /// Converts the reference-period Pf to an equivalent 1-year value with EN 1990 Annex C
+        /// eq. C.3, Phi(beta_n) = [Phi(beta_1)]^n, i.e. failure in different years is taken as independent events.
+        /// An approximation.
+        /// -> When time-invariant variables dominate, a too high annual beta may be obtained.
+        /// </summary>
+        public double AnnualProbabilityOfFailure()
+        {
+            int n = Math.Max(1, EurocodeConstants.ReferencePeriodsYears);
+            double pf = ProbabilityOfFailure;
+            if (n == 1) return pf;
+
+            // 1 - (1-pf)^(1/n)
+            // the first-order expansion pf/n has a relative error of about pf/2 for small pf, so we use the exact formula
+            return pf < 1e-6 ? pf / n : 1.0 - Math.Pow(1.0 - pf, 1.0 / n);
         }
 
         /// <summary>

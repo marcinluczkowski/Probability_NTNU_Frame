@@ -182,11 +182,13 @@ namespace Plugin_test_1.Reliability.FORM
 
                 case DistributionType.Gumbel:
                     {
+                        // x = un - alpha ln(-ln Phi(z)). For z > 0, -ln Phi(z) is taken from the
+                        // upper-tail probability (see MinusLogPhi): forming Phi(z) = 1 - (tiny)
+                        // first loses the digits that matter there, and the former clip of Phi(z)
+                        // at 1 - 1e-15 froze x for z > 7.9.
                         double alpha = v.StdDev * Math.Sqrt(6.0) / Math.PI;
                         double un = v.Mean - 0.5772 * alpha;
-                        double F = MathNet.Numerics.Distributions.Normal.CDF(0, 1, z);
-                        F = Math.Max(1e-15, Math.Min(1.0 - 1e-15, F));
-                        return un - alpha * Math.Log(-Math.Log(F));
+                        return un - alpha * Math.Log(MinusLogPhi(z));
                     }
             }
             throw new NotSupportedException($"Distribution {v.Distribution} not supported.");
@@ -200,6 +202,36 @@ namespace Plugin_test_1.Reliability.FORM
         {
             v.ComputeEquivalentNormal(x);
             return v.EquivNormalStdDev;
+        }
+
+        /// <summary>
+        /// dx/dz when z is known. Same quantity as dXdZ(v, x); for Gumbel it is written in terms
+        /// of z, dx/dz = alpha phi(z) / (Phi(z) (-ln Phi(z))), which stays accurate in the tails
+        /// where recovering z from x does not.
+        /// </summary>
+        public static double dXdZ(RandomVariable v, double x, double z)
+        {
+            if (v.Distribution != DistributionType.Gumbel) return dXdZ(v, x);
+
+            double zc = Math.Max(-ZMax, Math.Min(ZMax, z));
+            double alpha = v.StdDev * Math.Sqrt(6.0) / Math.PI;
+            double cdf = MathNet.Numerics.Distributions.Normal.CDF(0, 1, zc);
+            double pdf = MathNet.Numerics.Distributions.Normal.PDF(0, 1, zc);
+            return alpha * pdf / (cdf * MinusLogPhi(zc));
+        }
+
+        /// <summary>Beyond |z| = 37 the normal tail probability underflows.</summary>
+        private const double ZMax = 37.0;
+
+        /// <summary>-ln(Phi(z)), accurate in both tails.</summary>
+        public static double MinusLogPhi(double z)
+        {
+            z = Math.Max(-ZMax, Math.Min(ZMax, z));
+            if (z <= 0.0) return -Math.Log(MathNet.Numerics.Distributions.Normal.CDF(0, 1, z));
+
+            // upper tail: q = 1 - Phi(z) is computed directly, so there is no cancellation
+            double q = MathNet.Numerics.Distributions.Normal.CDF(0, 1, -z);
+            return (q < 1e-5) ? q * (1.0 + q * (0.5 + q / 3.0)) : -Math.Log(1.0 - q);
         }
 
         /// <summary>dz/dmu at fixed x - needed for parameter sensitivities.</summary>
@@ -284,7 +316,7 @@ namespace Plugin_test_1.Reliability.FORM
                 for (int i = 0; i < n; i++)
                 {
                     xx[i] = Marginal.XofZ(variables[i], z[i]);
-                    J[i] = Marginal.dXdZ(variables[i], xx[i]);
+                    J[i] = Marginal.dXdZ(variables[i], xx[i], z[i]);
                 }
 
                 g = limitStateFunction(xx);
@@ -381,7 +413,11 @@ namespace Plugin_test_1.Reliability.FORM
                 // limit-state surface (g0 ~ 0). Use the limit state's own scale.
                 double crit1 = Math.Abs(g);
 
-                if (crit1 < epsilon1 && crit2 < epsilon2)
+                // crit2 is compared with |u|, which makes it a tolerance on the ANGLE between u
+                // and the gradient. An absolute 1e-6 at |u| = 50 asks for more digits than the
+                // iteration can deliver, and a converged design point was then reported as a
+                // failed line search. For |u| <= 1 nothing changes.
+                if (crit1 < epsilon1 && crit2 < epsilon2 * Math.Max(1.0, beta))
                 {
                     converged = true;
                     msg = $"Converged in {iter} iterations.";

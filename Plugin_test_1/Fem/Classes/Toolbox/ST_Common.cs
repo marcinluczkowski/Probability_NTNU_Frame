@@ -22,7 +22,7 @@ namespace Propability_NTNU_v1.Classes.Toolbox
         public static int BBOX_SEGMENT = 100;
         public static double DIV_DIST_ALONG_AXIS = 1.0;
         public static int DIV_CIRCLE = 18;
-        public static double GRAVITY = 9.81; // m/s2
+        public static double GRAVITY = 10; // m/s2
 
         public static readonly string category = "NTNU";
         public static readonly string sub_mat = "FEM · 01 Material";
