@@ -22,6 +22,9 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
     ///
     /// The work is done in EurocodeMemberCheck.Run so that the section optimisation can call
     /// the same routine; this component only reads the inputs and lays out the outputs.
+    ///
+    /// Max Displacement (characteristic loads) and Max Displacement ULS (design combinations)
+    /// come from ModelDisplacement (ST_LS_Displacement.cs).
     /// </summary>
     public class ST_EC3_Members : GH_Component
     {
@@ -79,6 +82,13 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
                 GH_ParamAccess.tree);
             pManager.AddNumberParameter("Max Utilisation", "Umax", "Highest member utilisation.", GH_ParamAccess.item);
             pManager.AddTextParameter("Report", "Rep", "All checks and warnings.", GH_ParamAccess.item);
+            pManager.AddNumberParameter("Max Displacement", "Dmax",
+                "Largest displacement [mm] under the characteristic loads (the loads as modelled, every load case x 1.0: " +
+                "G + Q). Length of the translation vector, at the nodes and the middles of the members. The same value " +
+                "as FORM Members / RBDO Sections give for the same model.", GH_ParamAccess.item);
+            pManager.AddNumberParameter("Max Displacement ULS", "DmaxU",
+                "Largest displacement [mm] over the design combinations (6.10a) and (6.10b) that the check uses. " +
+                "The governing combination is in the Report.", GH_ParamAccess.item);
         }
 
         protected override void SolveInstance(IGH_DataAccess DA)
@@ -191,6 +201,18 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             foreach (string wmsg in res.Warnings)
                 AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, wmsg);
 
+            // --- largest displacement: characteristic loads and design combinations ---
+            DisplacementResult dChar = null, dUls = null;
+            try
+            {
+                dChar = ModelDisplacement.Characteristic(mdl);
+                dUls = ModelDisplacement.Design(mdl, loadCases, res.Factors);
+            }
+            catch (Exception ex)
+            {
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "The displacements could not be computed: " + ex.Message);
+            }
+
             Message = double.IsNaN(res.MaxUtilisation)
                 ? ""
                 : "U max = " + res.MaxUtilisation.ToString("F2", CultureInfo.InvariantCulture);
@@ -205,7 +227,9 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             DA.SetDataTree(6, utilModes);
             DA.SetDataTree(7, nChar);
             DA.SetData(8, res.MaxUtilisation);
-            DA.SetData(9, res.Report());
+            DA.SetData(9, res.Report() + "\n" + ModelDisplacement.Report(mdl, dChar, dUls));
+            DA.SetData(10, dChar != null ? dChar.MaxMm : double.NaN);
+            DA.SetData(11, dUls != null ? dUls.MaxMm : double.NaN);
         }
 
         /// <summary>"tag:LcrY:LcrZ" lines [m] -> dictionary.</summary>

@@ -226,6 +226,8 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             Message = res.Weight.ToString("F0", CultureInfo.InvariantCulture) + " kg" +
                       (double.IsNaN(rel.MinBeta) ? "" : ", \u03B2 min = " + rel.MinBeta.ToString("F2", CultureInfo.InvariantCulture));
 
+            TB_MemberResults.SetFromOptimisation(res, "RBDO Sections");
+
             // --- output ---
             DA.SetData(0, new GH_TB_Model(res.Model));
             DA.SetDataList(1, res.Groups);

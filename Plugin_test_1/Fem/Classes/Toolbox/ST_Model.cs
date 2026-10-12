@@ -31,6 +31,8 @@ namespace Propability_NTNU_v1.Classes.Toolbox
         public DenseMatrix KG { get; set; }
         public DenseMatrix LM { get; set; }
         public List<double[]> Disps { get; private set; } = new List<double[]>();
+        /// <summary>Results per member (group, beta, utilisation) written by the analysis components; null if none.</summary>
+        public TB_MemberResults Results { get; set; }
 
         // --- constructors --- 
         public TB_Model() { }
@@ -180,7 +182,8 @@ namespace Propability_NTNU_v1.Classes.Toolbox
             {
                 SelectedLC = SelectedLC,
                 KG = KG != null ? (DenseMatrix)KG.Clone() : null,
-                LM = LM != null ? (DenseMatrix)LM.Clone() : null
+                LM = LM != null ? (DenseMatrix)LM.Clone() : null,
+                Results = Results?.Clone()
             };
 
             copy.Disps.Clear();

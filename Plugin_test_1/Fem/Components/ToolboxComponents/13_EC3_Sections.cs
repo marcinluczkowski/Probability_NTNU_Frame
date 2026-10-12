@@ -85,7 +85,7 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
         protected override void RegisterOutputParams(GH_Component.GH_OutputParamManager pManager)
         {
             pManager.AddParameter(new Param_TB_Model(), "Model", "Model",
-                "The model with the optimised sections.", GH_ParamAccess.item);
+                "The model with the optimised sections, with the group and utilisation of every member attached, and the implied beta if it was computed (for Member Info).", GH_ParamAccess.item);
             pManager.AddTextParameter("Groups", "Grp", "Name of each group.", GH_ParamAccess.list);
             pManager.AddTextParameter("Sections", "Sec", "Section of each group.", GH_ParamAccess.list);
             pManager.AddTextParameter("Member Sections", "MSec", "Section of each member, in model order.", GH_ParamAccess.list);
@@ -108,6 +108,13 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
                 "Implied reliability index of the Eurocode design as a series system.", GH_ParamAccess.item);
             pManager.AddNumberParameter("Initial Implied System Beta", "Bsys0",
                 "Implied reliability index of the input model as a series system.", GH_ParamAccess.item);
+            pManager.AddNumberParameter("Max Displacement", "Dmax",
+                "Largest displacement of the Eurocode design [mm] under the characteristic loads (the loads as modelled, " +
+                "every load case x 1.0: G + Q). Length of the translation vector, at the nodes and the middles of the " +
+                "members. The same measure as RBDO Sections gives, so the two designs compare directly.", GH_ParamAccess.item);
+            pManager.AddNumberParameter("Max Displacement ULS", "DmaxU",
+                "Largest displacement of the Eurocode design [mm] over the design combinations (6.10a) and (6.10b). " +
+                "The governing combination is in the Report.", GH_ParamAccess.item);
         }
 
         protected override void SolveInstance(IGH_DataAccess DA)
@@ -220,7 +227,19 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             foreach (string wmsg in inputWarnings.Concat(res.Warnings))
                 AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, wmsg);
 
-            string report = res.Report() +
+            // --- largest displacement of the Eurocode design ---
+            DisplacementResult dChar = null, dUls = null;
+            try
+            {
+                dChar = ModelDisplacement.Characteristic(res.Model);
+                dUls = ModelDisplacement.Design(res.Model, loadCases, ec.Factors);
+            }
+            catch (Exception ex)
+            {
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "The displacements could not be computed: " + ex.Message);
+            }
+
+            string report = res.Report() + "\n" + ModelDisplacement.Report(res.Model, dChar, dUls) +
                 "\nelapsed: " + sw.Elapsed.TotalSeconds.ToString("F2", CultureInfo.InvariantCulture) + " s";
 
             Message = res.Weight.ToString("F0", CultureInfo.InvariantCulture) + " kg" +
@@ -229,6 +248,7 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
                           : ", \u03B2 min = " + res.ReliabilityOptimised.MinBeta.ToString("F2", CultureInfo.InvariantCulture));
 
             // --- output ---
+            TB_MemberResults.SetFromOptimisation(res, "EC3 Sections");      // groups, utilisations (and implied betas) travel with the model
             DA.SetData(0, new GH_TB_Model(res.Model));
             DA.SetDataList(1, res.Groups);
             DA.SetDataList(2, res.GroupSections);
@@ -247,6 +267,8 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             DA.SetData(13, before != null ? before.MinBeta : double.NaN);
             DA.SetData(14, (after != null && after.SystemResult != null) ? after.SystemResult.BetaSystem : double.NaN);
             DA.SetData(15, (before != null && before.SystemResult != null) ? before.SystemResult.BetaSystem : double.NaN);
+            DA.SetData(16, dChar != null ? dChar.MaxMm : double.NaN);
+            DA.SetData(17, dUls != null ? dUls.MaxMm : double.NaN);
         }
 
         /// <summary>Beta of the governing limit state of each member; NaN where there is none.</summary>
