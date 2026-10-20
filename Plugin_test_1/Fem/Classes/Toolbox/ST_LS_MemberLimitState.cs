@@ -711,6 +711,15 @@ namespace Propability_NTNU_v1.Classes.Reliability
                 default: return "compression";
             }
         }
+
+        /// <summary>
+        /// As ModeName(mode), but bending for the tension check of a member with no axial force.
+        /// </summary>
+        public static string ModeName(MemberMode mode, double n)
+        {
+            if (mode == MemberMode.Tension && Math.Abs(n) < 1.0) return "bending";
+            return ModeName(mode);
+        }
     }
 
     public class MemberReliabilityResult
@@ -780,7 +789,7 @@ namespace Propability_NTNU_v1.Classes.Reliability
             {
                 string name = "[" + r.Member.ToString(ci) + "] " + r.Tag;
                 sb.Append("  " + name.PadRight(17) + " ");
-                sb.Append(MemberLimitStateResult.ModeName(r.Mode).PadRight(10) + " ");
+                sb.Append(MemberLimitStateResult.ModeName(r.Mode, r.NMean).PadRight(10) + " ");
                 sb.Append((r.NMean * 1e-3).ToString("F1", ci).PadLeft(8) + " ");
                 sb.Append(r.UtilisationMean.ToString("F3", ci).PadLeft(8) + " ");
                 if (r.HasBeta)
@@ -801,7 +810,7 @@ namespace Propability_NTNU_v1.Classes.Reliability
                 MemberLimitStateResult g = Governing[CriticalMember];
                 sb.AppendLine("Lowest beta: " + MinBeta.ToString("F3", ci) + " in member [" +
                               CriticalMember.ToString(ci) + "] " + g.Tag + " (" +
-                              MemberLimitStateResult.ModeName(g.Mode) + ").");
+                              MemberLimitStateResult.ModeName(g.Mode,g.NMean) + ").");
             }
 
             int unloaded = 0;
@@ -1054,7 +1063,7 @@ namespace Propability_NTNU_v1.Classes.Reliability
                 sysBeta.Add(row.Form.Beta);
                 sysAlpha.Add((double[])row.Form.AlphaFactors.Clone());
                 sysLabels.Add("[" + row.Member.ToString(CultureInfo.InvariantCulture) + "] " + row.Tag + " " +
-                              MemberLimitStateResult.ModeName(row.Mode));
+                              MemberLimitStateResult.ModeName(row.Mode, row.NMean));
             }
 
             if (sysBeta.Count > 0 && systemSamples >= 0)

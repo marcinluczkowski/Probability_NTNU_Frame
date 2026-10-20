@@ -211,7 +211,7 @@ namespace Propability_NTNU_v1.Classes.Reliability
             {
                 string name = "[" + c.Member.ToString(ci) + "] " + c.Tag;
                 sb.Append("  " + name.PadRight(17) + " ");
-                sb.Append(MemberLimitStateResult.ModeName(c.Mode).PadRight(10) + " ");
+                sb.Append(MemberLimitStateResult.ModeName(c.Mode,c.NEd).PadRight(10) + " ");
                 sb.Append((c.NEd * 1e-3).ToString("F1", ci).PadLeft(8) + "  ");
                 sb.Append((c.NRd * 1e-3).ToString("F1", ci).PadLeft(8) + " ");
                 if (Options.Bending)
@@ -236,7 +236,7 @@ namespace Propability_NTNU_v1.Classes.Reliability
                 EcMemberCheck g = Governing[CriticalMember];
                 sb.AppendLine("Highest utilisation: " + MaxUtilisation.ToString("F3", ci) + " in member [" +
                               CriticalMember.ToString(ci) + "] " + g.Tag + " (" +
-                              MemberLimitStateResult.ModeName(g.Mode) + ").");
+                              MemberLimitStateResult.ModeName(g.Mode, g.NEd) + ").");
 
                 int over = 0;
                 for (int m = 0; m < Governing.Length; m++)

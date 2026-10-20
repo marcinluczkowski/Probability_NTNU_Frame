@@ -236,7 +236,7 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
                 }
                 else
                 {
-                    modes.Add(MemberLimitStateResult.ModeName(g.Mode));
+                    modes.Add(MemberLimitStateResult.ModeName(g.Mode, g.NMean));
                     beta.Add(g.Form.Beta);
                     pf.Add(g.Form.ProbabilityOfFailure);
                     conv.Add(g.Converged);

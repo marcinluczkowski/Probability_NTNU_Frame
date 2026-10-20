@@ -217,7 +217,7 @@ namespace Propability_NTNU_v1.Classes.Reliability
                     if (r.CriticalMember < 0) continue;
                     MemberLimitStateResult g = r.Governing[r.CriticalMember];
                     sb.AppendLine("  lowest " + pre + "beta, " + pair.Item1 + ": [" + r.CriticalMember.ToString(ci) + "] " + g.Tag +
-                                  " (" + MemberLimitStateResult.ModeName(g.Mode) + "), section " + r.Members[r.CriticalMember].SectionTag);
+                                  " (" + MemberLimitStateResult.ModeName(g.Mode, g.NMean) + "), section " + r.Members[r.CriticalMember].SectionTag);
                 }
             }
             else if (implied)
@@ -743,12 +743,12 @@ namespace Propability_NTNU_v1.Classes.Reliability
                         if (!row.HasBeta)
                         {
                             a.Ok[m] = false;
-                            a.Note[m] = MemberLimitStateResult.ModeName(row.Mode) + ": " + row.Status;
+                            a.Note[m] = MemberLimitStateResult.ModeName(row.Mode, row.NMean) + ": " + row.Status;
                         }
                         else if (!row.Converged)
                         {
                             a.Ok[m] = false;
-                            a.Note[m] = MemberLimitStateResult.ModeName(row.Mode) + ": FORM did not converge";
+                            a.Note[m] = MemberLimitStateResult.ModeName(row.Mode, row.NMean) + ": FORM did not converge";
                         }
                     }
                     if (!any) continue;                         // not stressed: nothing to verify
