@@ -24,6 +24,13 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
     ///   LC = -1            every load case x 1.0: the loads as modelled (the characteristic loads,
     ///                      the same as Max Displacement Dmax of the analysis components)
     ///   LC = n             load case n alone
+    ///
+    /// Besides the straight lines between the displaced nodes, every member's deformed axis is
+    /// drawn as a curve: the end displacements and rotations interpolated along the member (cubic
+    /// for the bending deflection, linear for the axial displacement and the twist, the exact
+    /// shape of a beam element without loads along it), times the factor. The curves are an
+    /// output, and they travel with the deformed model so that Member Info draws the sections
+    /// along them.
     /// </summary>
     public class ST_DeformedShape : GH_Component
     {
@@ -68,6 +75,9 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             pManager.AddVectorParameter("Rotation", "Rot", "Rotation in [rad]", GH_ParamAccess.list);
             pManager.AddPointParameter("points", "pts", "points", GH_ParamAccess.list);
             pManager.AddLineParameter("lines", "lns", "lines", GH_ParamAccess.list);
+            pManager.AddCurveParameter("Curves", "crv",
+                "Deformed axis of every member (bending deflection between the nodes included), times the factor. " +
+                "The deformed model carries them, so Member Info draws the sections along them.", GH_ParamAccess.list);
         }
 
         /// <summary>
@@ -176,13 +186,27 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
                 maxDisp = Math.Max(maxDisp, Math.Sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]));
             }
 
-            foreach (TB_Element_1D e in mdl.Elem1Ds)
+            int nEl = mdl.Elem1Ds.Count;
+            var axes = new Point3d[nEl][];
+            var zs = new Vector3d[nEl][];
+            var curves = new List<Curve>();
+            for (int ie = 0; ie < nEl; ie++)
             {
+                TB_Element_1D e = mdl.Elem1Ds[ie];
                 if (e?.Nodes == null || e.Nodes.Count < 2) continue;
                 double[] ds, de;
                 if (!nodeDisp.TryGetValue(e.Nodes[0], out ds) || !nodeDisp.TryGetValue(e.Nodes[1], out de)) continue;
                 Node sn = e.Nodes[0];
                 Node en = e.Nodes[1];
+
+                // deformed axis, from the undeformed member and its local z (before they are replaced below)
+                Point3d[] axis; Vector3d[] zdir;
+                if (DeformedAxis(sn.Pt, en.Pt, e.Pln.YAxis, ds, de, factor, 10, out axis, out zdir))
+                {
+                    axes[ie] = axis;
+                    zs[ie] = zdir;
+                    curves.Add(new Polyline(axis).ToNurbsCurve());
+                }
 
                 Line defln = new Line(
                         sn.Pt.X + ds[0] * factor,
@@ -206,6 +230,8 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
                 e.Pln = new Plane(e.Line.From, vy1, vz1);
             }
 
+            TB_MemberResults.SetDeformed(mdl, axes, zs, "Deformed_Shape: " + shown + ", factor " +
+                factor.ToString("0.###", CultureInfo.InvariantCulture));
             mdl.SelectedLC = lc;
             Message = shown + ": max " + (maxDisp * 1e3).ToString("F1", CultureInfo.InvariantCulture) + " mm (nodes)";
 
@@ -215,6 +241,49 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             DA.SetDataList(2, rotvecs);
             DA.SetDataList(3, pts);
             DA.SetDataList(4, lns);
+            DA.SetDataList(5, curves);
+        }
+
+        /// <summary>
+        /// Points along the deformed axis of a member from p1 to p2 (nSeg + 1 points) and the local z-direction
+        /// at each. d1, d2: displacements of the end nodes (ux, uy, uz [m], rx, ry, rz [rad], global), times
+        /// factor. Transverse displacement: cubic (Hermite) from the end translations and the slopes
+        /// theta x e_x; axial displacement and twist: linear. False if the member has no length.
+        /// </summary>
+        public static bool DeformedAxis(Point3d p1, Point3d p2, Vector3d localZ, double[] d1, double[] d2, double factor, int nSeg,
+                                        out Point3d[] axis, out Vector3d[] zdir)
+        {
+            axis = null; zdir = null;
+            Vector3d along = p2 - p1;
+            double len = along.Length;
+            if (!(len > 0.0) || d1 == null || d2 == null || d1.Length < 6 || d2.Length < 6) return false;
+            Vector3d ex = along / len;
+            Vector3d ez = localZ - (localZ * ex) * ex;
+            if (!(ez.Length > 1e-9)) ez = Vector3d.CrossProduct(ex, Vector3d.CrossProduct(Vector3d.ZAxis, ex));
+            if (!(ez.Length > 1e-9)) ez = Vector3d.CrossProduct(ex, Vector3d.YAxis);
+            ez.Unitize();
+            Vector3d ey = Vector3d.CrossProduct(ez, ex);
+
+            Vector3d u1 = new Vector3d(d1[0], d1[1], d1[2]) * factor, u2 = new Vector3d(d2[0], d2[1], d2[2]) * factor;
+            Vector3d r1 = new Vector3d(d1[3], d1[4], d1[5]) * factor, r2 = new Vector3d(d2[3], d2[4], d2[5]) * factor;
+            double a1 = u1 * ex, a2 = u2 * ex;                         // axial
+            Vector3d t1 = u1 - a1 * ex, t2 = u2 - a2 * ex;            // transverse
+            Vector3d s1 = Vector3d.CrossProduct(r1, ex), s2 = Vector3d.CrossProduct(r2, ex);   // slopes
+            double phi1 = r1 * ex, phi2 = r2 * ex;                    // twist
+
+            nSeg = Math.Max(1, nSeg);
+            axis = new Point3d[nSeg + 1];
+            zdir = new Vector3d[nSeg + 1];
+            for (int i = 0; i <= nSeg; i++)
+            {
+                double x = (double)i / nSeg, x2 = x * x, x3 = x2 * x;
+                double h1 = 1 - 3 * x2 + 2 * x3, h2 = x - 2 * x2 + x3, h3 = 3 * x2 - 2 * x3, h4 = x3 - x2;
+                Vector3d w = h1 * t1 + (h2 * len) * s1 + h3 * t2 + (h4 * len) * s2 + ((1 - x) * a1 + x * a2) * ex;
+                axis[i] = p1 + along * x + w;
+                double phi = (1 - x) * phi1 + x * phi2;
+                zdir[i] = ez * Math.Cos(phi) - ey * Math.Sin(phi); // local z turned by the twist
+            }
+            return true;
         }
 
         /// <summary>

@@ -7,15 +7,14 @@
 //    Group         the design group of each member (from RBDO / EC3 Sections)
 //    Beta          the reliability index of each member's governing limit state
 //    Utilisation   the Eurocode utilisation of each member's governing check
+//    Deformed axis the drawn deformed shape of each member (Deformed_Shape): points along the
+//                  member and the local z-direction there, for Member Info's sections
 //  together with where each came from.
 //
-//  WHO WRITES THEM
-//    FORM Members   -> Beta            (its new Model output)
-//    EC3 Members    -> Utilisation     (its new Model output)
-//    RBDO Sections  -> Group, Beta     (the optimised Model)
+//  WHO WRITES THEM (on the optimised model they output)
+//    RBDO Sections  -> Group, Beta
 //    EC3 Sections   -> Group, Utilisation, and Beta if the implied reliability was run
-//  A component that adds a result keeps the ones the model already had, so the
-//  chain RBDO Sections -> EC3 Members -> Member Info shows group, beta and U.
+//  Writing a result keeps the ones the model already had.
 //
 //  The arrays are in element order. A model built anew (Assembly, a new section
 //  optimisation) starts without results; DeepCopy keeps them.
@@ -23,6 +22,8 @@
 
 using System;
 using System.Linq;
+
+using Rhino.Geometry;
 
 using Propability_NTNU_v1.Classes.Reliability;
 
@@ -43,6 +44,15 @@ namespace Propability_NTNU_v1.Classes.Toolbox
         /// <summary>Target beta of the run that produced Beta; NaN if none.</summary>
         public double BetaTarget = double.NaN;
 
+        /// <summary>
+        /// Deformed shape as drawn by Deformed_Shape (displacements times its factor): per member the
+        /// points along the axis from start to end and the local z-direction at each; null if none
+        /// (and null for a member that could not be drawn).
+        /// </summary>
+        public Point3d[][] DeformedAxis;
+        public Vector3d[][] DeformedZ;
+        public string DeformedSource = "";
+
         public TB_MemberResults Clone()
         {
             return new TB_MemberResults
@@ -53,7 +63,10 @@ namespace Propability_NTNU_v1.Classes.Toolbox
                 GroupSource = GroupSource,
                 BetaSource = BetaSource,
                 UtilisationSource = UtilisationSource,
-                BetaTarget = BetaTarget
+                BetaTarget = BetaTarget,
+                DeformedAxis = DeformedAxis?.Select(a => (Point3d[])a?.Clone()).ToArray(),
+                DeformedZ = DeformedZ?.Select(a => (Vector3d[])a?.Clone()).ToArray(),
+                DeformedSource = DeformedSource
             };
         }
 
@@ -105,6 +118,18 @@ namespace Propability_NTNU_v1.Classes.Toolbox
             TB_MemberResults res = Of(mdl);
             res.Group = (string[])groups.Clone();
             res.GroupSource = source;
+        }
+
+        /// <summary>The deformed shape of every member, as drawn (one array of points and of z-directions per member).</summary>
+        public static void SetDeformed(TB_Model mdl, Point3d[][] axis, Vector3d[][] z, string source)
+        {
+            if (mdl == null || axis == null || z == null) return;
+            int n = mdl.Elem1Ds.Count;
+            if (axis.Length != n || z.Length != n) return;
+            TB_MemberResults res = Of(mdl);
+            res.DeformedAxis = axis;
+            res.DeformedZ = z;
+            res.DeformedSource = source;
         }
 
         /// <summary>Everything a section optimisation knows about its optimised model.</summary>

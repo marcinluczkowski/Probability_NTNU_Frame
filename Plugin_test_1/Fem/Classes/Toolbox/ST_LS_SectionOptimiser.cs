@@ -20,13 +20,41 @@
 //    1. Start with the lightest candidate in every group.
 //    2. Step up: assess the structure; every group with a member that fails the
 //       criterion moves to the next heavier candidate. Repeat until all members pass.
+//       Or, with the binary search switched on, first a bisection of the candidate list
+//       in all groups at once (2b below), then step up from its result if needed.
 //    3. Step down: take the groups from the heaviest to the lightest and try the next
 //       lighter candidate in one group at a time; keep it if all members still pass.
 //       Repeat until no group can be made lighter.
-//    4. Exchange: make ONE group one size heavier and step the other groups down
-//       again. If the structure ends up lighter, keep that design and go back to 3.
-//       Stop when no group gives a lighter structure this way. With an exchange
+//    3b. Restarts (optional, 'Restarts' > 0): from the best design so far, a few groups
+//       (by default half of them, at least 3) are given random sizes, between the lightest
+//       candidate and two sizes above the heaviest one in use. The structure is then
+//       stepped up where a member fails (as in 2) and stepped down (as in 3). The result
+//       is kept if it is lighter. Repeated 'Restarts' times. The random choices follow a
+//       seed, so a run can be repeated exactly.
+//    4. Exchange, on the best design: make ONE group one size heavier and step the other
+//       groups down again. If the structure ends up lighter, keep that design and go back
+//       to 3. Stop when no group gives a lighter structure this way. With an exchange
 //       depth of 2 the same is then tried with every PAIR of groups, and so on.
+//
+//  Why restarts: in a structure whose forces depend strongly on the sections (a floor
+//  grid in bending), the stepping search follows one path and can end at a design from
+//  which no single group can move, although a quite different design (e.g. a one-way
+//  load path) is lighter. Restarting from changed designs lets the search reach those.
+//  In the tests (20 Oct) the restarts found the lightest design of the whole catalogue
+//  range on the 5 x 5 m grid (checked against all designs) and changed nothing on the
+//  X-braced truss.
+//
+//    2b. Binary search (optional): every group keeps an interval of candidates, from the
+//       lightest that may still be enough to the lightest known to be enough (at first
+//       the heaviest). Each round assesses the structure with every group at the middle of
+//       its interval: a group whose members all pass continues in the lower half, a group
+//       with a failing member in the upper half. After about log2(number of candidates)
+//       rounds every group is at the lightest candidate that passed. In an indeterminate
+//       truss a group's result depends on the other groups' sections, which change between
+//       rounds, so the result is assessed once more and stepped up where a member fails;
+//       steps 3 and 4 follow as usual. The binary search needs fewer assessments than
+//       stepping up when the sections end far from the lightest candidate; near it the two
+//       are about the same.
 //
 //  Step 4 is needed in a statically indeterminate truss, where the member forces
 //  depend on the sections: a slightly heavier group can relieve another group
@@ -45,6 +73,16 @@
 //  the depth and the number of groups.
 //  A heavier candidate is assumed not to be weaker, which holds within one family of
 //  sections (e.g. HEA).
+//
+//  ITERATION HISTORY (phases: start, bisect, up, down, restart, exchange)
+//  Every assessment of the structure is recorded in order (SectionOptimisationResult.History):
+//  the trial design, its weight, its worst member value (lowest beta / highest utilisation),
+//  the part of the search it belongs to, whether the search moved on to it, and the design the
+//  search stands on after it. OptimumIteration is the assessment of the final design (where the
+//  optimum was found); the search may move on to it a few assessments later, when the restart
+//  or exchange that found it is finished (OptimumAccepted). Each design is assessed once, so the history has as many
+//  entries as there were assessments; designs the search returns to are not repeated, and Kept
+//  marks the entry of a design the search moved on to, at that assessment or later.
 //
 //  BEFORE AND AFTER
 //  The input model (with the sections it comes with) is assessed as well, so the
@@ -86,6 +124,32 @@ namespace Propability_NTNU_v1.Classes.Reliability
         public EcCheckResult Eurocode = null;
 
         public bool AllOk { get { return Ok.All(v => v); } }
+    }
+
+    /// <summary>One assessment of the structure during the search (one entry of the iteration history).</summary>
+    public class SearchIteration
+    {
+        /// <summary>0, 1, 2, ...: the assessment number. 0 = the lightest candidate in every group.</summary>
+        public int Index;
+        /// <summary>Part of the search: "start", "bisect", "up", "down", "restart" or "exchange" (see the header of this file).</summary>
+        public string Phase = "";
+        /// <summary>Restart number (1, 2, ...) for the assessments of a restart, 0 otherwise.</summary>
+        public int Restart;
+        /// <summary>Candidate index of each group in this trial design (0 = lightest).</summary>
+        public int[] Candidates = new int[0];
+        /// <summary>Weight of this trial design [kg].</summary>
+        public double Weight;
+        /// <summary>Worst member value of this trial design: the lowest beta, or the highest utilisation.</summary>
+        public double Worst;
+        /// <summary>Every member of this trial design satisfies the criterion.</summary>
+        public bool Feasible;
+        /// <summary>The search moved on to this design (it became the current design), at this assessment or later.</summary>
+        public bool Kept;
+        /// <summary>The design the search stands on after this assessment: its weight [kg] and worst value.</summary>
+        public double CurrentWeight = double.NaN;
+        public double CurrentWorst = double.NaN;
+        /// <summary>Candidate index of each group of the current design, as text ("0,3,2,...").</summary>
+        public string CurrentKey = "";
     }
 
     public class SectionOptimisationResult
@@ -132,6 +196,16 @@ namespace Propability_NTNU_v1.Classes.Reliability
 
         /// <summary>Assessment of the final design.</summary>
         public MemberAssessment Final;
+        /// <summary>Every assessment of the search, in order.</summary>
+        public List<SearchIteration> History = new List<SearchIteration>();
+        /// <summary>Index in History of the assessment of the final design (where the optimum was found); -1 if none.</summary>
+        public int OptimumIteration = -1;
+        /// <summary>Index in History from which on the search stands on the final design; -1 if none.</summary>
+        public int OptimumAccepted = -1;
+        /// <summary>Restarts made, groups changed in each, and the seed of the random choices.</summary>
+        public int Restarts, RestartGroups, Seed;
+        /// <summary>Weight [kg] at the end of the first search (index 0) and of every restart, before the exchange step.</summary>
+        public List<double> SearchWeights = new List<double>();
         public List<string> Log = new List<string>();
         public List<string> Warnings = new List<string>();
 
@@ -149,6 +223,21 @@ namespace Propability_NTNU_v1.Classes.Reliability
 
             sb.AppendLine("Search (weight in kg, 'worst' is the " + (HigherIsBetter ? "lowest beta" : "highest utilisation") + "):");
             foreach (string line in Log) sb.AppendLine("  " + line);
+            if (Restarts > 0 && SearchWeights.Count > 0)
+            {
+                double best = SearchWeights.Min();
+                int hit = SearchWeights.Count(w => Math.Abs(w - best) <= 1e-9 * Math.Max(1.0, best));
+                sb.AppendLine("  restarts: " + Restarts.ToString(ci) + " (" + RestartGroups.ToString(ci) + " group(s) given random sizes each time, seed " +
+                              Seed.ToString(ci) + "); the lightest design before the exchange step (" + best.ToString("F1", ci) + " kg) was reached by " +
+                              hit.ToString(ci) + " of the " + SearchWeights.Count.ToString(ci) + " searches (the first and the restarts); their results ranged " +
+                              SearchWeights.Min().ToString("F1", ci) + " - " + SearchWeights.Max().ToString("F1", ci) + " kg.");
+            }
+            if (History.Count > 0)
+                sb.AppendLine("  '#' is the assessment number (the Iteration outputs). " + History.Count.ToString(ci) +
+                              " assessments; the final design was assessed at #" + OptimumIteration.ToString(ci) +
+                              (OptimumAccepted != OptimumIteration
+                                  ? " and the search moved on to it at #" + OptimumAccepted.ToString(ci) + ", when the restart or exchange that found it was finished."
+                                  : " and the search moved on to it there."));
             sb.AppendLine();
 
             sb.AppendLine(Feasible
@@ -429,7 +518,11 @@ namespace Propability_NTNU_v1.Classes.Reliability
             string criterion,
             bool higherIsBetter,
             int exchangeDepth = DefaultExchangeDepth,
-            int maxEvaluations = DefaultMaxEvaluations)
+            int maxEvaluations = DefaultMaxEvaluations,
+            bool binarySearch = false,
+            int restarts = 0,
+            int seed = 1,
+            int restartGroups = 0)
         {
             if (mdl == null) throw new ArgumentNullException(nameof(mdl));
             if (candidates == null || candidates.Count == 0) throw new ArgumentException("There are no candidate sections.");
@@ -472,9 +565,12 @@ namespace Propability_NTNU_v1.Classes.Reliability
             // twice. Null when the limit on the number of assessments is reached.
             maxEvaluations = Math.Max(1, maxEvaluations);
             var known = new Dictionary<string, Summary>();
+            Func<int[], string> keyOf = idx => string.Join(",", idx.Select(i => i.ToString(ci)));
+            string phase = "start";                          // part of the search, for the history
+            int restartNo = 0;                               // restart number, for the history
             Func<int[], Summary> evaluate = idx =>
             {
-                string key = string.Join(",", idx.Select(i => i.ToString(ci)));
+                string key = keyOf(idx);
                 Summary sum;
                 if (known.TryGetValue(key, out sum)) return sum;
                 if (res.Evaluations >= maxEvaluations) return null;
@@ -483,15 +579,48 @@ namespace Propability_NTNU_v1.Classes.Reliability
                 res.Evaluations++;
 
                 sum = new Summary();
+                sum.Index = res.History.Count;
                 sum.Weight = t.Model.Weight;
                 sum.Failing = FailingGroups(t.Assessment, groupIndex, nGroup);
                 sum.Worst = Worst(t.Assessment, higherIsBetter);
                 known[key] = sum;
+
+                // history: this trial, and the design the search stands on (unchanged until it moves on)
+                var it = new SearchIteration
+                {
+                    Index = sum.Index,
+                    Phase = phase,
+                    Restart = restartNo,
+                    Candidates = (int[])idx.Clone(),
+                    Weight = sum.Weight,
+                    Worst = sum.Worst,
+                    Feasible = sum.Failing.Count == 0,
+                };
+                if (res.History.Count > 0)
+                {
+                    SearchIteration prev = res.History[res.History.Count - 1];
+                    it.CurrentWeight = prev.CurrentWeight;
+                    it.CurrentWorst = prev.CurrentWorst;
+                    it.CurrentKey = prev.CurrentKey;
+                }
+                res.History.Add(it);
                 return sum;
+            };
+
+            // the search moves on to design idx: from the latest assessment on, it is the current design
+            Action<int[], Summary> moveTo = (idx, s) =>
+            {
+                if (s == null || res.History.Count == 0) return;
+                SearchIteration last = res.History[res.History.Count - 1];
+                last.CurrentKey = keyOf(idx);
+                last.CurrentWeight = s.Weight;
+                last.CurrentWorst = s.Worst;
+                if (s.Index >= 0 && s.Index < res.History.Count) res.History[s.Index].Kept = true;   // where it was assessed
             };
 
             int[] current = new int[nGroup];                 // lightest candidate everywhere
             Summary trial = evaluate(current);
+            moveTo(current, trial);
             res.WeightLightest = trial.Weight;
             res.WeightInitial = mdl.Weight;
 
@@ -500,13 +629,77 @@ namespace Propability_NTNU_v1.Classes.Reliability
 
             int step = 0;
             bool feasible = false, outOfBudget = false;
-            res.Log.Add("step  " + "action".PadRight(41) + " " + "weight".PadLeft(9) + " " + "worst".PadLeft(10) + "   groups not ok");
+            res.Log.Add("step     #  " + "action".PadRight(41) + " " + "weight".PadLeft(9) + " " + "worst".PadLeft(10) + "   groups not ok");
+
+            string action = "start: " + candidates[0].Name + " in every group";
+
+            // ------------------------------------------------------------------
+            //  Binary search (optional): all groups bisect their candidate list at once
+            // ------------------------------------------------------------------
+            if (binarySearch && nCand > 1 && trial.Failing.Count > 0)
+            {
+                res.Log.Add(LogLine(step, action, trial, trial.Failing.Count.ToString(ci)));
+
+                // [lo, hi]: the lightest candidate that may still be enough .. the lightest known
+                // (or, at first, assumed) to be enough. The lightest design is assessed already.
+                int[] lo = new int[nGroup];
+                int[] hi = new int[nGroup];
+                for (int g = 0; g < nGroup; g++)
+                {
+                    bool fails = trial.Failing.Contains(g);
+                    lo[g] = fails ? 1 : 0;
+                    hi[g] = fails ? nCand - 1 : 0;
+                }
+
+                phase = "bisect";
+                int round = 0;
+                while (Enumerable.Range(0, nGroup).Any(g => lo[g] < hi[g]))
+                {
+                    int[] mid = new int[nGroup];
+                    for (int g = 0; g < nGroup; g++) mid[g] = (lo[g] < hi[g]) ? (lo[g] + hi[g]) / 2 : hi[g];
+
+                    Summary s = evaluate(mid);
+                    if (s == null)
+                    {
+                        outOfBudget = true;
+                        break;
+                    }
+                    round++;
+                    step++;
+                    int open = 0, lower = 0;
+                    for (int g = 0; g < nGroup; g++)
+                    {
+                        if (lo[g] >= hi[g]) continue;
+                        open++;
+                        if (s.Failing.Contains(g)) lo[g] = mid[g] + 1;
+                        else { hi[g] = mid[g]; lower++; }
+                    }
+                    moveTo(mid, s);
+                    res.Log.Add(LogLine(step, Shorten("bisect " + round.ToString(ci) + ": " + open.ToString(ci) + " open group(s), " +
+                                                      lower.ToString(ci) + " to the lower half", 41),
+                                        s, s.Failing.Count.ToString(ci)));
+                }
+
+                if (!outOfBudget)
+                {
+                    Summary found = evaluate(hi);
+                    if (found == null) outOfBudget = true;
+                    else
+                    {
+                        current = hi;
+                        trial = found;
+                        moveTo(current, trial);
+                        step++;
+                        action = "bisection result (lightest that passed)";
+                    }
+                }
+                phase = "up";
+            }
 
             // ------------------------------------------------------------------
             //  Step up until every member passes
             // ------------------------------------------------------------------
-            string action = "start: " + candidates[0].Name + " in every group";
-            while (true)
+            while (!outOfBudget)
             {
                 List<int> failing = trial.Failing;
                 res.Log.Add(LogLine(step, action, trial, failing.Count.ToString(ci)));
@@ -526,6 +719,7 @@ namespace Propability_NTNU_v1.Classes.Reliability
                 }
 
                 foreach (int g in movable) current[g]++;
+                phase = "up";
                 Summary heavier = evaluate(current);
                 if (heavier == null)
                 {
@@ -535,6 +729,7 @@ namespace Propability_NTNU_v1.Classes.Reliability
                 }
 
                 trial = heavier;
+                moveTo(current, heavier);
                 action = "up: " + Shorten(string.Join(", ", movable.Select(g => groups[g] + " " + candidates[current[g]].Name)), 37);
                 step++;
             }
@@ -579,14 +774,87 @@ namespace Propability_NTNU_v1.Classes.Reliability
                                 ok ? "0   kept" : lighter.Failing.Count.ToString(ci) + "   rejected"));
                         }
 
-                        if (ok) again = true;
+                        if (ok)
+                        {
+                            again = true;
+                            if (log) moveTo(idx, lighter);         // the main search moves on (not inside an exchange)
+                        }
                         else idx[g]++;
                     }
                 }
                 return idx;
             };
 
+            phase = "down";
             if (feasible && !outOfBudget) current = stepDown(current, null, true);
+
+            // ------------------------------------------------------------------
+            //  Restarts (optional): from the best design so far, some groups get random sizes;
+            //  step up where a member fails, step down; kept if lighter.
+            // ------------------------------------------------------------------
+            if (feasible && !outOfBudget)
+            {
+                Summary bestSum = evaluate(current);                 // assessed already
+                if (bestSum != null) res.SearchWeights.Add(bestSum.Weight);
+                int nKick = restartGroups > 0 ? Math.Min(restartGroups, nGroup) : DefaultRestartGroups(nGroup);
+                res.Restarts = Math.Max(0, restarts);
+                res.RestartGroups = nKick;
+                res.Seed = seed;
+                var rnd = new Random(seed);
+
+                for (int r = 1; r <= restarts && !outOfBudget && bestSum != null; r++)
+                {
+                    phase = "restart";
+                    restartNo = r;
+
+                    // the best design, with nKick groups at random sizes up to two above the heaviest in use
+                    int kmax = Math.Min(nCand - 1, current.Max() + 2);
+                    int[] idx = (int[])current.Clone();
+                    List<int> changed = Enumerable.Range(0, nGroup).OrderBy(x => rnd.Next()).Take(nKick).OrderBy(x => x).ToList();
+                    foreach (int g in changed) idx[g] = rnd.Next(0, kmax + 1);
+
+                    Summary s = evaluate(idx);
+                    bool ok = s != null;
+
+                    // step up where a member fails
+                    while (ok && s.Failing.Count > 0)
+                    {
+                        List<int> movable = s.Failing.Where(g => idx[g] < nCand - 1).ToList();
+                        if (movable.Count == 0) { ok = false; break; }
+                        foreach (int g in movable) idx[g]++;
+                        s = evaluate(idx);
+                        if (s == null) ok = false;
+                    }
+                    if (outOfBudget || s == null) { outOfBudget = true; break; }
+
+                    string what = "restart " + r.ToString(ci) + ": " + string.Join(", ", changed.Select(g => groups[g])) + " random";
+                    if (!ok)
+                    {
+                        step++;
+                        res.Log.Add(LogLine(step, Shorten(what, 41), s, s.Failing.Count.ToString(ci) + "   no design found"));
+                        continue;
+                    }
+
+                    // step down, then keep it if it is lighter
+                    int[] down = stepDown(idx, null, false);
+                    if (outOfBudget) break;
+                    Summary end = evaluate(down);
+                    if (end == null) { outOfBudget = true; break; }
+                    res.SearchWeights.Add(end.Weight);
+
+                    bool lighter = end.Failing.Count == 0 && end.Weight < bestSum.Weight * (1.0 - 1e-12);
+                    step++;
+                    res.Log.Add(LogLine(step, Shorten(what, 41), end, lighter ? "0   kept" : "0   not lighter"));
+                    if (lighter)
+                    {
+                        current = down;
+                        bestSum = end;
+                        moveTo(down, end);
+                    }
+                }
+                restartNo = 0;
+            }
+            phase = "exchange";
 
             // ------------------------------------------------------------------
             //  Exchange: one group (with depth 2 also every pair of groups, ...) one size heavier,
@@ -655,9 +923,12 @@ namespace Propability_NTNU_v1.Classes.Reliability
                         step++;
                         res.Log.Add(LogLine(step, Shorten("exchange: " + string.Join(", ", set.Select(g => groups[g])) + " up", 41),
                                             result, "0   kept"));
-                        res.Log.Add("        " + string.Join("; ", parts));
+                        res.Log.Add("           " + string.Join("; ", parts));
 
+                        moveTo(reduced, result);
+                        phase = "down";
                         current = stepDown(reduced, null, true);
+                        phase = "exchange";
                         improved = true;
                         break;
                     }
@@ -666,6 +937,13 @@ namespace Propability_NTNU_v1.Classes.Reliability
             if (feasible && exchangeDepth > 0)
                 res.Log.Add("exchanges tried (up to " + exchangeDepth.ToString(ci) +
                             " group(s) one size heavier, the others stepped down again): " + exchangesTried.ToString(ci));
+
+            // where the optimum was found (its assessment), and from where on the search stands on it
+            string finalKey = keyOf(current);
+            Summary finalSum;
+            if (known.TryGetValue(finalKey, out finalSum)) res.OptimumIteration = finalSum.Index;
+            for (int i = res.History.Count - 1; i >= 0 && res.History[i].CurrentKey == finalKey; i--)
+                res.OptimumAccepted = i;
 
             if (outOfBudget)
                 res.Warnings.Add("The search stopped after " + maxEvaluations.ToString(ci) +
@@ -720,7 +998,11 @@ namespace Propability_NTNU_v1.Classes.Reliability
             int systemSamples = SystemReliability.DefaultSamples,
             int exchangeDepth = DefaultExchangeDepth,
             int maxEvaluations = DefaultMaxEvaluations,
-            MemberCheckOptions options = null)
+            MemberCheckOptions options = null,
+            bool binarySearch = false,
+            int restarts = 0,
+            int seed = 1,
+            int restartGroups = 0)
         {
             if (double.IsNaN(betaTarget)) throw new ArgumentException("The target beta is not a number.");
             MemberCheckOptions opt = options ?? MemberCheckOptions.Default();
@@ -769,7 +1051,7 @@ namespace Propability_NTNU_v1.Classes.Reliability
                                                             maxIterations, false, -1, opt)),
                 "beta >= " + betaTarget.ToString("0.00##", CultureInfo.InvariantCulture) +
                 " in every member (the system beta is reported, not constrained); members checked for " + opt.Describe(),
-                true, exchangeDepth, maxEvaluations);
+                true, exchangeDepth, maxEvaluations, binarySearch, restarts, seed, restartGroups);
 
             // the final design once more, now with the system reliability, and the input model for comparison
             res.Final = toAssessment(MemberReliability.Run(res.Model, vars, bindings, correlation, bucklingLengths,
@@ -797,7 +1079,11 @@ namespace Propability_NTNU_v1.Classes.Reliability
             EcFactors factors = null,
             int exchangeDepth = DefaultExchangeDepth,
             int maxEvaluations = DefaultMaxEvaluations,
-            MemberCheckOptions options = null)
+            MemberCheckOptions options = null,
+            bool binarySearch = false,
+            int restarts = 0,
+            int seed = 1,
+            int restartGroups = 0)
         {
             if (!(maxUtilisation > 0.0)) throw new ArgumentException("The utilisation limit must be positive.");
             MemberCheckOptions opt = options ?? MemberCheckOptions.Default();
@@ -820,7 +1106,7 @@ namespace Propability_NTNU_v1.Classes.Reliability
                 mdl, candidates, groupOfMember, assess,
                 "Eurocode utilisation <= " + maxUtilisation.ToString("0.00##", CultureInfo.InvariantCulture) +
                 " in every member; members checked for " + opt.Describe(),
-                false, exchangeDepth, maxEvaluations);
+                false, exchangeDepth, maxEvaluations, binarySearch, restarts, seed, restartGroups);
             res.Warnings.AddRange(res.Final.Eurocode.Warnings);
 
             res.EurocodeOptimised = res.Final.Eurocode;
@@ -867,9 +1153,17 @@ namespace Propability_NTNU_v1.Classes.Reliability
             public MemberAssessment Assessment;
         }
 
+        /// <summary>Groups given random sizes in a restart when not set: half of the groups, at least 3 (or all, if fewer).</summary>
+        public static int DefaultRestartGroups(int nGroup)
+        {
+            return Math.Min(nGroup, Math.Max(3, (nGroup + 1) / 2));
+        }
+
         /// <summary>What the search keeps of a trial design.</summary>
         private class Summary
         {
+            /// <summary>Assessment number (index in the history).</summary>
+            public int Index = -1;
             public double Weight;
             /// <summary>Groups with a member that does not satisfy the criterion.</summary>
             public List<int> Failing;
@@ -926,7 +1220,7 @@ namespace Propability_NTNU_v1.Classes.Reliability
         private static string LogLine(int step, string action, Summary t, string tail)
         {
             CultureInfo ci = CultureInfo.InvariantCulture;
-            return step.ToString(ci).PadLeft(4) + "  " + action.PadRight(41) + " " +
+            return step.ToString(ci).PadLeft(4) + "  " + ("#" + t.Index.ToString(ci)).PadLeft(4) + "  " + action.PadRight(41) + " " +
                    t.Weight.ToString("F1", ci).PadLeft(9) + " " +
                    (double.IsNaN(t.Worst) ? "-" : t.Worst.ToString("F3", ci)).PadLeft(10) + "   " + tail;
         }

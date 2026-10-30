@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
 
+using Grasshopper;
 using Grasshopper.Kernel;
+using Grasshopper.Kernel.Data;
 
 using Propability_NTNU_v1;
 using Propability_NTNU_v1.Classes.Toolbox;
@@ -74,6 +76,21 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
                 "true (default): members are checked for the axial force AND the bending moments from the rigid " +
                 "joints (EN 1993-1-1 6.2.1(7), 6.3.3 with Annex B, lateral-torsional buckling; elastic, Cm >= 0.9, " +
                 "as Karamba3D's defaults). false: axial force only.", GH_ParamAccess.item, true);
+            pManager.AddBooleanParameter("Binary Search", "Bin",
+                "false (default): start with the lightest candidate in every group and step the failing groups up one " +
+                "size at a time. true: first a binary search of the candidate list (lightest to heaviest) in all groups " +
+                "at once, about log2(candidates) assessments, then step up where needed. The step down and the exchange " +
+                "follow in both cases. Fewer assessments when the sections end far from the lightest candidate.",
+                GH_ParamAccess.item, false);
+            pManager.AddIntegerParameter("Restarts", "Rst",
+                "0 (default): one search. n > 0: after the first search, n restarts: from the best design so far, half of " +
+                "the groups (at least 3) get random sizes, the structure is stepped up where a member fails and stepped down " +
+                "again, and the result is kept if it is lighter. The exchange step then runs once, on the best design. Finds " +
+                "lighter designs where the forces depend strongly on the sections (floor grids); about n times the work.",
+                GH_ParamAccess.item, 0);
+            pManager.AddIntegerParameter("Seed", "Seed",
+                "Seed of the random choices of the restarts: the same seed gives the same result. Another seed shows whether " +
+                "the result depends on the random choices.", GH_ParamAccess.item, 1);
 
             for (int i = 3; i < pManager.ParamCount; i++) pManager[i].Optional = true;
         }
@@ -81,7 +98,7 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
         protected override void RegisterOutputParams(GH_Component.GH_OutputParamManager pManager)
         {
             pManager.AddParameter(new Param_TB_Model(), "Model", "Model",
-                "The model with the optimised sections.", GH_ParamAccess.item);
+                "The model with the optimised sections, with the group and beta of every member attached (for Member Info).", GH_ParamAccess.item);
             pManager.AddTextParameter("Groups", "Grp", "Name of each group.", GH_ParamAccess.list);
             pManager.AddTextParameter("Sections", "Sec", "Section of each group.", GH_ParamAccess.list);
             pManager.AddTextParameter("Member Sections", "MSec", "Section of each member, in model order.", GH_ParamAccess.list);
@@ -101,6 +118,39 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             pManager.AddNumberParameter("Initial Min Beta", "Bmin0", "Lowest member reliability index of the input model.", GH_ParamAccess.item);
             pManager.AddNumberParameter("Initial System Beta", "Bsys0",
                 "Reliability index of the input model as a series system.", GH_ParamAccess.item);
+            pManager.AddNumberParameter("Max Displacement", "Dmax",
+                "Largest displacement of the optimised structure [mm] under the loads as modelled (every load case x 1.0, " +
+                "E of the model); with LC:<lc>:<ref> at the characteristic values these are the characteristic loads G + Q. " +
+                "Length of the translation vector, at the nodes and the middles of the members. The same measure as " +
+                "EC3 Sections gives, so the two designs compare directly.", GH_ParamAccess.item);
+            pManager.AddIntegerParameter("Iteration", "It",
+                "Iteration history, one entry per assessment of the structure, in the order of the search: the assessment " +
+                "number (0 = the lightest candidate in every group; the '#' column of the search in the Report). Every " +
+                "trial design is assessed once.", GH_ParamAccess.list);
+            pManager.AddNumberParameter("Iteration Weight", "ItW", "Weight of the trial design of each assessment [kg].", GH_ParamAccess.list);
+            pManager.AddNumberParameter("Iteration Beta", "ItB",
+                "Lowest member reliability index (below the target: not good enough; the system beta is computed for the final design only) of the trial design of each assessment.", GH_ParamAccess.list);
+            pManager.AddTextParameter("Iteration Phase", "ItP",
+                "Part of the search each assessment belongs to: start; bisect (a round of the binary search, if on); restart (see Restarts); up (the groups with a failing member one size " +
+                "heavier); down (one group one size lighter); exchange (one group one size heavier, the others lighter again).",
+                GH_ParamAccess.list);
+            pManager.AddBooleanParameter("Iteration Kept", "ItK",
+                "True for the designs the search moved on to (at that assessment, or later when an exchange was accepted).",
+                GH_ParamAccess.list);
+            pManager.AddNumberParameter("Current Weight", "CurW",
+                "Weight of the design the search stands on after each assessment [kg]: the convergence curve.", GH_ParamAccess.list);
+            pManager.AddNumberParameter("Current Beta", "CurB",
+                "Lowest member reliability index (below the target: not good enough; the system beta is computed for the final design only) of the design the search stands on after each assessment.", GH_ParamAccess.list);
+            pManager.AddIntegerParameter("Optimum Iteration", "ItOpt",
+                "The assessment of the final design: where the optimum was found. (When it was found inside a restart or an " +
+                "exchange, the search moves on to it once that is finished: the Current outputs change a few assessments later.)",
+                GH_ParamAccess.item);
+            pManager.AddTextParameter("Iteration Sections", "ItSec",
+                "One branch per assessment: the section of each group in the trial design, in the order of Groups.",
+                GH_ParamAccess.tree);
+            pManager.AddIntegerParameter("Iteration Restart", "ItR",
+                "Restart number of each assessment: 0 for the first search and the exchange step, 1, 2, ... for the restarts.",
+                GH_ParamAccess.list);
         }
 
         protected override void SolveInstance(IGH_DataAccess DA)
@@ -134,6 +184,11 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             DA.GetData(11, ref exchangeDepth);
             bool bending = true;
             DA.GetData(12, ref bending);
+            bool binarySearch = false;
+            DA.GetData(13, ref binarySearch);
+            int restarts = 0, seed = 1;
+            DA.GetData(14, ref restarts);
+            DA.GetData(15, ref seed);
             MemberCheckOptions options = bending ? MemberCheckOptions.Default() : MemberCheckOptions.AxialOnly();
 
             if (gh_mdl == null || gh_mdl.Value == null)
@@ -198,7 +253,7 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
                 res = SectionOptimiser.RunReliability(mdl, candidates, groups, vars, bindings, betaTarget,
                                                       rho, lcr, Math.Max(1, maxIt), Math.Max(0, sysSamples),
                                                       Math.Max(0, exchangeDepth), SectionOptimiser.DefaultMaxEvaluations,
-                                                      options);
+                                                      options, binarySearch, Math.Max(0, restarts), seed);
             }
             catch (Exception ex)
             {
@@ -219,16 +274,27 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             foreach (string wmsg in inputWarnings.Concat(res.Warnings))
                 AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, wmsg);
 
+            // --- largest displacement of the optimised structure ---
+            DisplacementResult dChar = null;
+            try
+            {
+                dChar = ModelDisplacement.Characteristic(res.Model);
+            }
+            catch (Exception ex)
+            {
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, "The displacements could not be computed: " + ex.Message);
+            }
+
             string report = res.Report() +
                 (sys != null ? "\n" + sys.Report() : "") +
+                "\n" + ModelDisplacement.Report(res.Model, dChar) +
                 "\nelapsed: " + sw.Elapsed.TotalSeconds.ToString("F2", CultureInfo.InvariantCulture) + " s";
 
             Message = res.Weight.ToString("F0", CultureInfo.InvariantCulture) + " kg" +
                       (double.IsNaN(rel.MinBeta) ? "" : ", \u03B2 min = " + rel.MinBeta.ToString("F2", CultureInfo.InvariantCulture));
 
-            TB_MemberResults.SetFromOptimisation(res, "RBDO Sections");
-
             // --- output ---
+            TB_MemberResults.SetFromOptimisation(res, "RBDO Sections");     // groups and betas travel with the model
             DA.SetData(0, new GH_TB_Model(res.Model));
             DA.SetDataList(1, res.Groups);
             DA.SetDataList(2, res.GroupSections);
@@ -245,6 +311,31 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             DA.SetDataList(11, GoverningBetas(before));
             DA.SetData(12, before != null ? before.MinBeta : double.NaN);
             DA.SetData(13, (before != null && before.SystemResult != null) ? before.SystemResult.BetaSystem : double.NaN);
+            DA.SetData(14, dChar != null ? dChar.MaxMm : double.NaN);
+            SetHistory(DA, 15, res);
+        }
+
+        /// <summary>The iteration history of the search, as outputs first ... first + 9.</summary>
+        private static void SetHistory(IGH_DataAccess DA, int first, SectionOptimisationResult res)
+        {
+            List<SearchIteration> h = res.History;
+            var sections = new DataTree<string>();
+            for (int i = 0; i < h.Count; i++)
+            {
+                var path = new GH_Path(i);
+                foreach (int c in h[i].Candidates) sections.Add(res.CandidateNames[c], path);
+            }
+
+            DA.SetDataList(first, h.Select(x => x.Index).ToList());
+            DA.SetDataList(first + 1, h.Select(x => x.Weight).ToList());
+            DA.SetDataList(first + 2, h.Select(x => x.Worst).ToList());
+            DA.SetDataList(first + 3, h.Select(x => x.Phase).ToList());
+            DA.SetDataList(first + 4, h.Select(x => x.Kept).ToList());
+            DA.SetDataList(first + 5, h.Select(x => x.CurrentWeight).ToList());
+            DA.SetDataList(first + 6, h.Select(x => x.CurrentWorst).ToList());
+            DA.SetData(first + 7, res.OptimumIteration);
+            DA.SetDataTree(first + 8, sections);
+            DA.SetDataList(first + 9, h.Select(x => x.Restart).ToList());
         }
 
         /// <summary>Beta of the governing limit state of each member; NaN where there is none.</summary>

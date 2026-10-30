@@ -27,6 +27,17 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
     ///                 (RBDO Sections and EC3 Sections attach them to the optimised model they
     ///                 output), else not shown
     /// Nothing is computed here: the component only reads and draws.
+    ///
+    /// Show Sections draws every member as a solid, like Karamba3D's Beam View: the outline of
+    /// its cross-section (root fillets left out) swept along the member, in the member's local
+    /// axes (flanges along local y, web along local z, as in the analysis), coloured as the
+    /// members. I-sections from H, W, tw, tf; RHS from H, W and the wall thicknesses; any other
+    /// section as a square of the same area. The solids are also an output (Section Meshes),
+    /// e.g. for baking.
+    ///
+    /// Connected to the DefModel of Deformed_Shape (Follow Deformation on), the members, labels
+    /// and sections follow the deformed shape that Deformed_Shape drew: the curved member axes,
+    /// with the sections turned by the twist of the members.
     /// </summary>
     public class ST_Member_Info : GH_Component
     {
@@ -34,10 +45,16 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
         private readonly List<Point3d> _pts = new List<Point3d>();
         private readonly List<string> _texts = new List<string>();
         private readonly List<Line> _lines = new List<Line>();
+        private readonly List<Line[]> _segments = new List<Line[]>();      // what is drawn of each member (curved when deformed)
         private readonly List<Color> _colours = new List<Color>();
         private bool _colourLines;
         private int _textSize = 12;
         private BoundingBox _box = BoundingBox.Empty;
+        private readonly List<Mesh> _meshes = new List<Mesh>();
+        private readonly List<DisplayMaterial> _materials = new List<DisplayMaterial>();
+        private bool _showSections;
+        private static readonly Color NoColourSection = Color.FromArgb(190, 190, 190);
+        private static readonly Color SectionEdges = Color.FromArgb(70, 70, 70);
 
         private static readonly Color TextColour = Color.FromArgb(40, 40, 40);
         private static readonly Color NoValue = Color.FromArgb(150, 150, 150);
@@ -102,6 +119,18 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
                 "where members cross (X-bracing). A label that would be closer is moved along its own member " +
                 "(to 30 %, 70 %, 20 % or 80 % of its length). Default: a quarter of the median member length. " +
                 "0 = every label at the middle of its member.", GH_ParamAccess.item);
+            pManager.AddBooleanParameter("Show Sections", "Show",
+                "true: draw every member as a solid with its cross-section (like Karamba3D's Beam View), coloured as " +
+                "chosen in Colour (light grey with Colour = 0). Flanges along the local y-axis, web along the local " +
+                "z-axis, as in the analysis; root fillets not drawn. Section dimensions [mm] are drawn in metres.",
+                GH_ParamAccess.item, false);
+            pManager.AddNumberParameter("Profile Scale", "PScale",
+                "Scale of the drawn cross-sections (1 = true size), e.g. 3 to see small sections on a large model.",
+                GH_ParamAccess.item, 1.0);
+            pManager.AddBooleanParameter("Follow Deformation", "Def",
+                "true (default): with the DefModel of Deformed_Shape, draw the members, labels and sections along the " +
+                "deformed shape it drew (curved axes, sections turned by the twist). false: always the undeformed members.",
+                GH_ParamAccess.item, true);
 
             for (int i = 1; i < pManager.ParamCount; i++) pManager[i].Optional = true;
         }
@@ -119,11 +148,15 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             pManager.AddTextParameter("Info", "Info", "Where the groups, betas and utilisations came from.", GH_ParamAccess.item);
             pManager.AddTextParameter("Legend", "Leg", "What each colour of the chosen colour mode means (e.g. the sections, lightest first).", GH_ParamAccess.list);
             pManager.AddColourParameter("Legend Colours", "LegC", "The colour of each Legend entry, e.g. for Grasshopper's Legend component.", GH_ParamAccess.list);
+            pManager.AddMeshParameter("Section Meshes", "SecM",
+                "Every member as a solid with its cross-section (see Show Sections), in model order; with Colours, e.g. " +
+                "for a custom preview or for baking. Given whether or not Show Sections is on.", GH_ParamAccess.list);
         }
 
         protected override void SolveInstance(IGH_DataAccess DA)
         {
-            _pts.Clear(); _texts.Clear(); _lines.Clear(); _colours.Clear();
+            _pts.Clear(); _texts.Clear(); _lines.Clear(); _colours.Clear(); _segments.Clear();
+            _meshes.Clear(); _materials.Clear();
             _box = BoundingBox.Empty;
 
             // --- input ---
@@ -150,6 +183,13 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             DA.GetDataList(11, scaleIn);
             double spacing = double.NaN;
             DA.GetData(12, ref spacing);
+            bool showSections = false;
+            double profileScale = 1.0;
+            DA.GetData(13, ref showSections);
+            DA.GetData(14, ref profileScale);
+            if (!(profileScale > 0.0)) profileScale = 1.0;
+            bool followDeformation = true;
+            DA.GetData(15, ref followDeformation);
 
             if (gh_mdl == null || gh_mdl.Value == null || gh_mdl.Value.Elem1Ds == null || gh_mdl.Value.Elem1Ds.Count == 0)
             {
@@ -263,12 +303,40 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             CultureInfo ci = CultureInfo.InvariantCulture;
             var points = new List<Point3d>();
             var memberLines = mdl.Elem1Ds.Select(e => (e.OriginalLine.Length > 1e-12) ? e.OriginalLine : e.Line).ToList();
+
+            // the axis of every member as points with the local z-direction: straight, or deformed (Deformed_Shape)
+            bool deformed = followDeformation && stored != null && stored.DeformedAxis != null && stored.DeformedZ != null &&
+                            stored.DeformedAxis.Length == n && stored.DeformedZ.Length == n;
+            var axisPts = new Point3d[n][];
+            var axisZ = new Vector3d[n][];
+            for (int m = 0; m < n; m++)
+            {
+                TB_Element_1D e = mdl.Elem1Ds[m];
+                Point3d[] a = deformed ? stored.DeformedAxis[m] : null;
+                Vector3d[] z = deformed ? stored.DeformedZ[m] : null;
+                if (a != null && z != null && a.Length >= 2 && z.Length == a.Length)
+                {
+                    axisPts[m] = a;
+                    axisZ[m] = z;
+                }
+                else
+                {
+                    Line l = deformed ? e.Line : memberLines[m];
+                    Vector3d lz = (e != null) ? e.Pln.YAxis : Vector3d.ZAxis;
+                    axisPts[m] = new[] { l.From, l.To };
+                    axisZ[m] = new[] { lz, lz };
+                }
+                if (deformed) memberLines[m] = new Line(axisPts[m][0], axisPts[m][axisPts[m].Length - 1]);
+            }
+            if (deformed) info.Add("shape: deformed, " + stored.DeformedSource);
             if (double.IsNaN(spacing) || spacing < 0.0)
             {
                 var lengths = memberLines.Select(l => l.Length).OrderBy(x => x).ToList();
                 spacing = 0.25 * lengths[lengths.Count / 2];
             }
             List<Point3d> anchors = PlaceLabels(memberLines, spacing);
+            if (deformed)
+                for (int m = 0; m < n; m++) anchors[m] = OnAxis(axisPts[m], memberLines[m], anchors[m]);
 
             for (int m = 0; m < n; m++)
             {
@@ -297,11 +365,24 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
                 _texts.Add(string.Join("\n", parts));
                 _lines.Add(ln);
                 _colours.Add(c);
-                points.Add(ln.From);
-                points.Add(ln.To);
+                var seg = new Line[axisPts[m].Length - 1];
+                for (int k = 0; k < seg.Length; k++) seg[k] = new Line(axisPts[m][k], axisPts[m][k + 1]);
+                _segments.Add(seg);
+                points.AddRange(axisPts[m]);
             }
             _box = new BoundingBox(points);
             _colourLines = colourMode > 0;
+
+            // --- the members as solids with their cross-sections ---
+            for (int m = 0; m < n; m++)
+            {
+                TB_Element_1D e = mdl.Elem1Ds[m];
+                Mesh mesh = SectionMesh(e?.Sec, axisPts[m], axisZ[m], profileScale);
+                _meshes.Add(mesh);
+                _materials.Add(new DisplayMaterial(colourMode > 0 ? _colours[m] : NoColourSection));
+                if (mesh != null) _box.Union(mesh.GetBoundingBox(false));
+            }
+            _showSections = showSections;
             _textSize = Math.Max(6, Math.Min(72, textSize));
 
             int nBelow = (beta == null) ? 0 : beta.Count(b => !double.IsNaN(b) && b < betaTarget);
@@ -345,6 +426,102 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             }
             DA.SetDataList(9, legend);
             DA.SetDataList(10, legendColours);
+            DA.SetDataList(11, _meshes);
+        }
+
+        /// <summary>
+        /// The member as a closed solid: the outline of its cross-section swept along the member axis c
+        /// (two points for a straight member, more for a deformed one), with the local z-direction z at
+        /// each point (made square to the axis; local y = z x tangent). Dimensions [mm] are converted to
+        /// metres and multiplied by scale. Null for a member without length or section.
+        /// </summary>
+        private static Mesh SectionMesh(TB_Section sec, Point3d[] c, Vector3d[] z, double scale)
+        {
+            if (sec == null || c == null || z == null || c.Length < 2 || z.Length != c.Length) return null;
+            int ns = c.Length;
+            if (!((c[ns - 1] - c[0]).Length > 0.0)) return null;
+
+            // section axes at every point of the axis
+            var ey = new Vector3d[ns];
+            var ez = new Vector3d[ns];
+            for (int i = 0; i < ns; i++)
+            {
+                Vector3d t = c[Math.Min(i + 1, ns - 1)] - c[Math.Max(i - 1, 0)];
+                if (!(t.Length > 0.0)) t = c[ns - 1] - c[0];
+                t.Unitize();
+                Vector3d vz = z[i] - (z[i] * t) * t;
+                if (!(vz.Length > 1e-9))
+                {
+                    vz = Vector3d.CrossProduct(t, Vector3d.CrossProduct(Vector3d.ZAxis, t));
+                    if (!(vz.Length > 1e-9)) vz = Vector3d.CrossProduct(t, Vector3d.YAxis);
+                }
+                vz.Unitize();
+                ez[i] = vz;
+                ey[i] = Vector3d.CrossProduct(vz, t);
+            }
+
+            // outline (counter-clockwise in y-z), inner outline (hollow sections) and the end faces as rectangles [mm]
+            var outer = new List<double[]>();
+            var inner = new List<double[]>();
+            var caps = new List<double[][]>();
+            Func<double, double, double, double, double[][]> rect = (y0, z0, y1, z1) =>
+                new[] { new[] { y0, z0 }, new[] { y1, z0 }, new[] { y1, z1 }, new[] { y0, z1 } };
+
+            if (sec is Section_I si && si.H > 0 && si.W > 0 && si.Tw > 0 && si.Tf > 0)
+            {
+                double h = 0.5 * si.H, b = 0.5 * si.W, t = 0.5 * si.Tw, f = si.Tf;
+                outer.AddRange(new[] {
+                    new[] { -b, -h }, new[] { b, -h }, new[] { b, -h + f }, new[] { t, -h + f }, new[] { t, h - f }, new[] { b, h - f },
+                    new[] { b, h }, new[] { -b, h }, new[] { -b, h - f }, new[] { -t, h - f }, new[] { -t, -h + f }, new[] { -b, -h + f } });
+                caps.Add(rect(-b, -h, b, -h + f));
+                caps.Add(rect(-t, -h + f, t, h - f));
+                caps.Add(rect(-b, h - f, b, h));
+            }
+            else if (sec is Section_RHS sr && sr.H > 0 && sr.W > 0 && sr.Tw > 0 && sr.Tf > 0)
+            {
+                double h = 0.5 * sr.H, b = 0.5 * sr.W, tw = sr.Tw, tf = sr.Tf;
+                outer.AddRange(new[] { new[] { -b, -h }, new[] { b, -h }, new[] { b, h }, new[] { -b, h } });
+                inner.AddRange(new[] { new[] { -b + tw, -h + tf }, new[] { -b + tw, h - tf }, new[] { b - tw, h - tf }, new[] { b - tw, -h + tf } });
+                caps.Add(rect(-b, -h, b, -h + tf));
+                caps.Add(rect(-b, h - tf, b, h));
+                caps.Add(rect(-b, -h + tf, -b + tw, h - tf));
+                caps.Add(rect(b - tw, -h + tf, b, h - tf));
+            }
+            else if (sec.Area > 0)
+            {
+                double a = 0.5 * Math.Sqrt(sec.Area);                 // a square of the same area
+                outer.AddRange(new[] { new[] { -a, -a }, new[] { a, -a }, new[] { a, a }, new[] { -a, a } });
+                caps.Add(rect(-a, -a, a, a));
+            }
+            else return null;
+
+            double k = 0.001 * scale;                                  // [mm] -> [m]
+            Func<double[], int, Point3d> P = (yz, i) => c[i] + ey[i] * (yz[0] * k) + ez[i] * (yz[1] * k);
+
+            var mesh = new Mesh();
+            Action<Point3d, Point3d, Point3d, Point3d> quad = (a, b, c, d) =>
+            {
+                int i0 = mesh.Vertices.Add(a);
+                mesh.Vertices.Add(b);
+                mesh.Vertices.Add(c);
+                mesh.Vertices.Add(d);
+                mesh.Faces.AddFace(i0, i0 + 1, i0 + 2, i0 + 3);
+            };
+            foreach (List<double[]> loop in new[] { outer, inner })
+                for (int j = 0; j + 1 < ns; j++)
+                    for (int i = 0; i < loop.Count; i++)
+                    {
+                        double[] p = loop[i], q = loop[(i + 1) % loop.Count];
+                        quad(P(p, j), P(q, j), P(q, j + 1), P(p, j + 1));
+                    }
+            foreach (double[][] r in caps)
+            {
+                quad(P(r[0], 0), P(r[3], 0), P(r[2], 0), P(r[1], 0));                     // start face, facing backwards
+                quad(P(r[0], ns - 1), P(r[1], ns - 1), P(r[2], ns - 1), P(r[3], ns - 1));  // end face
+            }
+            mesh.Normals.ComputeNormals();
+            mesh.Compact();
+            return mesh;
         }
 
         /// <summary>
@@ -390,6 +567,18 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
                 anchors.Add(best);
             }
             return anchors;
+        }
+
+        /// <summary>The point of a (curved) member axis at the same fraction of the length as p on the chord.</summary>
+        private static Point3d OnAxis(Point3d[] axis, Line chord, Point3d p)
+        {
+            if (axis == null || axis.Length < 2) return p;
+            Vector3d d = chord.To - chord.From;
+            double t = (d * d > 0.0) ? ((p - chord.From) * d) / (d * d) : 0.5;
+            t = Math.Max(0.0, Math.Min(1.0, t)) * (axis.Length - 1);
+            int i = Math.Min((int)Math.Floor(t), axis.Length - 2);
+            double f = t - i;
+            return axis[i] + (axis[i + 1] - axis[i]) * f;
         }
 
         /// <summary>
@@ -452,12 +641,24 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
 
         public override BoundingBox ClippingBox => _box;
 
+        public override void DrawViewportMeshes(IGH_PreviewArgs args)
+        {
+            if (!_showSections) return;
+            for (int i = 0; i < _meshes.Count; i++)
+                if (_meshes[i] != null) args.Display.DrawMeshShaded(_meshes[i], _materials[i]);
+        }
+
         public override void DrawViewportWires(IGH_PreviewArgs args)
         {
-            // the outputs (points, lines) are not drawn: the labels and coloured members are the preview
-            if (_colourLines)
-                for (int i = 0; i < _lines.Count; i++)
-                    args.Display.DrawLine(_lines[i], _colours[i], 4);
+            // the outputs (points, lines) are not drawn: the labels and coloured members (or solids) are the preview
+            if (_showSections)
+            {
+                for (int i = 0; i < _meshes.Count; i++)
+                    if (_meshes[i] != null) args.Display.DrawMeshWires(_meshes[i], SectionEdges);
+            }
+            else if (_colourLines)
+                for (int i = 0; i < _segments.Count; i++)
+                    foreach (Line l in _segments[i]) args.Display.DrawLine(l, _colours[i], 4);
 
             for (int i = 0; i < _pts.Count; i++)
                 if (!string.IsNullOrEmpty(_texts[i]))

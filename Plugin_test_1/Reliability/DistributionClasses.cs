@@ -277,8 +277,8 @@ namespace Plugin_test_1.Reliability
                 // Permanent load: normal, 10% COV
                 new StochasticVariable("G", Gk, 0.50, 0.10, "normal"),
 
-                // Variable load: gumbel, 26% COV, 98th percentile
-                new StochasticVariable("Q", Qk, 0.98, 0.26, "gumbel"),
+                // Variable load: gumbel, 26% COV, 99th percentile
+                new StochasticVariable("Q", Qk, 0.99, 0.26, "gumbel"),
 
                 // Resistance model uncertainty: lognormal, 5% COV (mean-based)
                 new StochasticVariable("theta_R", 1.15, 0.05, 0.05, "lognormal", 1.15),
