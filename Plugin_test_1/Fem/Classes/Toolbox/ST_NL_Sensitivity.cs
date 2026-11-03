@@ -240,6 +240,7 @@ namespace Propability_NTNU_v1.Classes.Toolbox
 
             try
             {
+                if (Mdl.TrussCount > 0) throw new NotSupportedException(TB_Model.TrussNonlinearMessage);
                 Gradient = Compute(respDof, pars);
                 Ok = true;
             }

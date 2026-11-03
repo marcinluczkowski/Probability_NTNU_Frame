@@ -57,7 +57,16 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             // --- solve ---
 
             TB_Model mdl = gh_mdl.Value;
-            SolveLS slv = new SolveLS(ref mdl);
+            SolveLS slv;
+            try
+            {
+                slv = new SolveLS(ref mdl);
+            }
+            catch (Exception ex)
+            {
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Error, ex.Message);
+                return;
+            }
             double utilization = EvaluateMaxUtilization(slv.Mdl);
 
             // --- output ---

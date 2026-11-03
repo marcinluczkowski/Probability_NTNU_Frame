@@ -58,6 +58,14 @@ namespace Propability_NTNU_v1.Classes.Toolbox
 
         private void Solve()
         {
+            // truss elements are supported in the linear analysis only (for now)
+            if (Mdl.TrussCount > 0)
+            {
+                Converged = false;
+                Message = TB_Model.TrussNonlinearMessage;
+                return;
+            }
+
             int nNode = Mdl.Nodes.Count;
             int nDofTotal = nNode * N_DOF;
 

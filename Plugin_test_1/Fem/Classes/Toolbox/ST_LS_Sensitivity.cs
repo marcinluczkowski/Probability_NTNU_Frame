@@ -148,13 +148,15 @@ namespace Propability_NTNU_v1.Classes.Toolbox
             _nDofTotal = mdl.Nodes.Count * N_DOF;
             Baseline = new double[NPar];
 
-            // --- supports ---
-            _isFixed = new bool[_nDofTotal];
-            foreach (Node nd in mdl.Nodes)
+            // --- supports, and the rotations of the nodes where only truss elements meet ---
+            _isFixed = mdl.ConstrainedDofs(N_DOF);
+
+            // a truss model can be a mechanism without the factorisation noticing (a nearly zero pivot);
+            // the check is cheap there because the truss nodes' rotations are already removed
+            if (mdl.TrussCount > 0)
             {
-                if (nd.Sup == null || nd.Sup.Conditions == null) continue;
-                for (int i = 0; i < N_DOF; i++)
-                    if (nd.Sup.Conditions[i]) _isFixed[N_DOF * nd.Id.Value + i] = true;
+                string mechanism = mdl.MechanismMessage();
+                if (mechanism.Length > 0) throw new InvalidOperationException(mechanism);
             }
 
             // --- element matrices, split into the part that scales with E and the torsion part ---
@@ -530,8 +532,10 @@ namespace Propability_NTNU_v1.Classes.Toolbox
             }
             catch (Exception ex)
             {
-                throw new InvalidOperationException(
-                    "The stiffness matrix could not be factorised. Check that the supports restrain the structure. " + ex.Message);
+                string mechanism = Mdl.MechanismMessage();
+                throw new InvalidOperationException(mechanism.Length > 0
+                    ? mechanism
+                    : "The stiffness matrix could not be factorised. Check that the supports restrain the structure. " + ex.Message);
             }
         }
 
@@ -552,8 +556,12 @@ namespace Propability_NTNU_v1.Classes.Toolbox
 
             for (int i = 0; i < x.Length; i++)
                 if (double.IsNaN(x[i]) || double.IsInfinity(x[i]))
-                    throw new InvalidOperationException(
-                        "The stiffness matrix is singular. Check that the supports restrain the structure.");
+                {
+                    string mechanism = Mdl.MechanismMessage();
+                    throw new InvalidOperationException(mechanism.Length > 0
+                        ? mechanism
+                        : "The stiffness matrix is singular. Check that the supports restrain the structure.");
+                }
             return x;
         }
 

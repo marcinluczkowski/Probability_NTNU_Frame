@@ -47,6 +47,8 @@ namespace Propability_NTNU_v1.Classes.Reliability
                              int maxIter = 50,
                              double tol = 1e-9)
         {
+            if (baseline != null && baseline.TrussCount > 0)
+                throw new NotSupportedException(TB_Model.TrussNonlinearMessage);
             _baseline = baseline;
             _pars = pars;
             _resp = resp;

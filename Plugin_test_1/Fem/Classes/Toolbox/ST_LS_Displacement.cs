@@ -17,7 +17,8 @@
 //      u_mid = (u1 + u2) / 2  +  (L / 8) (theta1 - theta2) x e_x
 //
 //  with e_x the unit vector along the member (theta x e_x is the slope of the
-//  deflected axis). The axial part is the average of the two ends.
+//  deflected axis). The axial part is the average of the two ends. A truss
+//  element (Hinges) stays straight between its nodes: u_mid = (u1 + u2) / 2.
 //
 //  The largest VERTICAL displacement |uz| is found the same way; it is what a
 //  deflection limit such as L/300 is usually checked against.
@@ -237,6 +238,7 @@ namespace Propability_NTNU_v1.Classes.Reliability
                 int b1 = N_DOF * n1.Id.Value, b2 = N_DOF * n2.Id.Value;
                 double[] dTheta = { u[b1 + 3] - u[b2 + 3], u[b1 + 4] - u[b2 + 4], u[b1 + 5] - u[b2 + 5] };
                 double[] slope = Cross(dTheta, ex);               // (theta1 - theta2) x e_x
+                if (e.Hinges) slope = new double[3];              // a truss stays straight: its middle is the mean of its ends
 
                 double[] t = new double[3];
                 for (int i = 0; i < 3; i++)

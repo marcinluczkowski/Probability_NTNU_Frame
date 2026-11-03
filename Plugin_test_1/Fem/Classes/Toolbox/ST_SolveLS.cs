@@ -51,23 +51,31 @@ namespace Propability_NTNU_v1.Classes.Toolbox
             }
 
 
-            // overwrite boundary condition & load
-            foreach (Node n in Mdl.Nodes.Where(n => n.Sup != null))
+            // a mechanism (e.g. truss nodes not held in every direction) cannot be solved: say where
+            string mechanism = Mdl.MechanismMessage();
+            if (mechanism.Length > 0)
+                throw new InvalidOperationException(mechanism);
+
+            // overwrite boundary condition & load: the supports, and the rotations of the nodes where
+            // only truss elements meet (nothing resists them; they are zero, as in Karamba3D)
+            bool[] constrained = Mdl.ConstrainedDofs(N_DOF);
+            foreach (Node n in Mdl.Nodes)
             {
                 // i: i-th degree of freedom in a node
                 for (int i = 0; i < N_DOF; i++)
                 {
-                    if (n.Sup.Conditions[i] == false)
+                    int ind = N_DOF * n.Id.Value + i;
+                    if (!constrained[ind])
                     {
                         continue;
                     }
 
-                    int ind = N_DOF * n.Id.Value + i;
+                    bool supported = n.Sup != null && n.Sup.Conditions != null && n.Sup.Conditions[i];
 
                     for (int j = 0; j < lV.ColumnCount; j++)
                     {
-
-                        n.Sup.React[j][i] = -1 * lV[ind, j];
+                        if (supported)
+                            n.Sup.React[j][i] = -1 * lV[ind, j];
 
                         lV[ind, j] = 0;
                     }
@@ -99,7 +107,16 @@ namespace Propability_NTNU_v1.Classes.Toolbox
             for (int i = 0; i < nCols; i++)
             {
                 double[] b = (i < lVs.ColumnCount) ? lVs.Column(i) : Vector.Create(N_DOF * Mdl.Nodes.Count, 0.0);
-                SparseLU lu = SparseLU.Create(kGs, order, Common.PRES);
+                SparseLU lu;
+                try
+                {
+                    lu = SparseLU.Create(kGs, order, Common.PRES);
+                }
+                catch (Exception ex)
+                {
+                    throw new InvalidOperationException(
+                        "The stiffness matrix could not be factorised; check that the supports restrain the structure. " + ex.Message);
+                }
                 double[] disp = Vector.Create(N_DOF * Mdl.Nodes.Count, 0.0);
 
                 lu.Solve(b, disp);

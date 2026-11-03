@@ -77,6 +77,34 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
                 AddRuntimeMessage(GH_RuntimeMessageLevel.Error,
                     "Load position must be at a beam node (endpoint). Connect beam line endpoints or ensure points match line ends.");
 
+            // --- truss elements (Hinges): which node rotations are removed, and is it a mechanism ---
+            TB_Model m = gh_mdl.Value;
+            int nTruss = m.TrussCount;
+            if (nTruss > 0 && m.Validity.All(v => v))
+            {
+                List<Node> trussNodes = m.TrussOnlyNodes();
+                AddRuntimeMessage(GH_RuntimeMessageLevel.Remark,
+                    nTruss + " truss element(s) (Hinges): axial force only. " +
+                    (trussNodes.Count > 0
+                        ? "The rotations of " + trussNodes.Count + " node(s) where only trusses meet are removed: " +
+                          string.Join(", ", trussNodes.Select(n => "N" + n.Id.Value)) + "."
+                        : "Every node also has a rigid element, so no rotations are removed."));
+
+                var trussNodeSet = new HashSet<Node>(trussNodes);
+                foreach (TB_Load l in m.Loads)
+                {
+                    if (l is TB_Load_Point pl && pl.Node != null && trussNodeSet.Contains(pl.Node) &&
+                        pl.Loads.Count >= 6 && (pl.Loads[3] != 0.0 || pl.Loads[4] != 0.0 || pl.Loads[5] != 0.0))
+                        AddRuntimeMessage(GH_RuntimeMessageLevel.Warning,
+                            "The point load at N" + pl.Node.Id.Value + " has a moment, but only trusses meet there: " +
+                            "the moment is not carried.");
+                }
+
+                string mechanism = m.MechanismMessage();
+                if (mechanism.Length > 0)
+                    AddRuntimeMessage(GH_RuntimeMessageLevel.Warning, mechanism);
+            }
+
             // --- output ---
             DA.SetData(0, gh_mdl);
             DA.SetData(1, gh_mdl.Value.Weight);

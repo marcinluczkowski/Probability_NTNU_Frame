@@ -488,7 +488,7 @@ namespace Propability_NTNU_v1.Classes.Reliability
                     made.Add(Tuple.Create(rec, mat, sec));
                 }
 
-                elems.Add(new TB_Element_1D(e.Line, e.Tag, sec, e.Vz, e.Buckling_Length));
+                elems.Add(new TB_Element_1D(e.Line, e.Tag, sec, e.Vz, e.Buckling_Length, e.Hinges));
             }
 
             List<TB_Support> sups = (mdl.Sups ?? new List<TB_Support>()).Where(s => s != null).Select(s => s.DeepCopy()).ToList();

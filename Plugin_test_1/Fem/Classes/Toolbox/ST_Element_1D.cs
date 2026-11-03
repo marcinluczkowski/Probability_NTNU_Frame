@@ -32,7 +32,14 @@ namespace Propability_NTNU_v1.Classes.Toolbox
         public DenseMatrix TM { get; set; }
         public DenseMatrix EKG { get; set; }
         public Vector3d Vz { get; private set; }
-        public List<bool> Hinges { get; } = new List<bool>();
+        /// <summary>
+        /// True = hinged at both ends: a truss element that carries axial force only (Karamba3D:
+        /// Modify Element with Bending = false). Its stiffness is EA/L along the axis and nothing else,
+        /// so it does not resist the rotation of its nodes; at a node where only trusses meet the
+        /// rotations are removed (TB_Model.ConstrainedDofs). False (default) = a beam rigidly
+        /// connected at both ends. Set it with the constructor or SetHinges, which rebuild the stiffness.
+        /// </summary>
+        public bool Hinges { get; private set; } = false;
         public double Beta { get; set; }
         public Plane Pln { get; set; }
         public double Weight { get; set; }
@@ -41,7 +48,8 @@ namespace Propability_NTNU_v1.Classes.Toolbox
 
         // --- constructors --- 
         public TB_Element_1D() { }
-        public TB_Element_1D(Line _line, string _tag, TB_Section _sec, Vector3d _vz, double _bucklen)
+        /// <param name="_hinges">True = truss element, hinged at both ends (see Hinges).</param>
+        public TB_Element_1D(Line _line, string _tag, TB_Section _sec, Vector3d _vz, double _bucklen, bool _hinges = false)
         {
             Line = _line;
             OriginalLine = _line;
@@ -49,7 +57,8 @@ namespace Propability_NTNU_v1.Classes.Toolbox
             Sec = _sec;
             Vz = _vz;
             Buckling_Length = _bucklen;
-            
+            Hinges = _hinges;
+
             Nodes = new List<Node>();
             Beta = Calc_Beta(_vz);
             Weight = Calc_Weight();
@@ -64,12 +73,17 @@ namespace Propability_NTNU_v1.Classes.Toolbox
 
         // --- methods ---
 
-        public void SetHingeData(bool smy, bool smz, bool emy, bool emz)
+        /// <summary>
+        /// Makes the element a truss (true: hinged at both ends, axial force only) or a rigidly
+        /// connected beam (false), and rebuilds its stiffness. Change it before the model is assembled
+        /// (Modify Element does this on a copy of the element).
+        /// </summary>
+        public void SetHinges(bool hinges)
         {
-            Hinges.Add(smy);
-            Hinges.Add(smz);
-            Hinges.Add(emy);
-            Hinges.Add(emz);
+            Hinges = hinges;
+            EK = Calc_ElemStiffMX();
+            if (TM == null) TM = Calc_TransMX();
+            EKG = TM.Transpose().Multiply(EK).Multiply(TM) as DenseMatrix;
         }
 
         public TB_Element_1D DeepCopy()
@@ -89,13 +103,9 @@ namespace Propability_NTNU_v1.Classes.Toolbox
                 Beta = Beta,
                 Pln = Pln,
                 Weight = Weight,
-                Buckling_Length = Buckling_Length
+                Buckling_Length = Buckling_Length,
+                Hinges = Hinges
             };
-
-            foreach (bool hinge in Hinges)
-            {
-                copy.Hinges.Add(hinge);
-            }
 
             return copy;
         }
@@ -103,6 +113,7 @@ namespace Propability_NTNU_v1.Classes.Toolbox
         public override string ToString()
         {
             string txt = "Element_1D: " + Tag + ", " + Sec.Tag;
+            if (Hinges) txt += ", truss (hinged)";
             return txt;
         }
         public bool IsValid()
@@ -214,27 +225,25 @@ namespace Propability_NTNU_v1.Classes.Toolbox
             double c = EIy / Math.Pow(L, 3);
             double d = GJ / L;
 
-            double Lyi = 1.0;
-            double Lyj = 1.0;
-            double Lzi = 1.0;
-            double Lzj = 1.0;
-
-            if (Hinges.Count != 0)
-            {
-                if (Hinges[0] == false) Lyi = 0.0;
-                if (Hinges[1] == false) Lzi = 0.0;
-                if (Hinges[2] == false) Lyj = 0.0;
-                if (Hinges[3] == false) Lzj = 0.0;
-            }
-
-            double Lyb = 1.0 + Lyi + Lyj;
-            double Lzb = 1.0 + Lzi + Lzj;
-
             // axial direction
             ESM[0, 0] =  a;
             ESM[0, 6] = -a;
             ESM[6, 0] = -a;
             ESM[6, 6] =  a;
+
+            // truss element (Hinges): axial stiffness only, no bending, shear or torsion
+            // (Karamba3D: Bending = false). The element then does not resist node rotations.
+            if (Hinges) return ESM;
+
+            // end fixity factors for bending, 1 = rigid at that end (0 would release the end moment;
+            // not used: an element is either rigid at both ends or a truss)
+            double Lyi = 1.0;
+            double Lyj = 1.0;
+            double Lzi = 1.0;
+            double Lzj = 1.0;
+
+            double Lyb = 1.0 + Lyi + Lyj;
+            double Lzb = 1.0 + Lzi + Lzj;
 
             // bending around z-axis
             ESM[1, 1] = 6 * b * (Lzi + Lzj + 4 * Lzi * Lzj) / Lzb;

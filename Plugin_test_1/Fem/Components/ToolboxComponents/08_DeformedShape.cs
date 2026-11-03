@@ -28,7 +28,8 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
     /// Besides the straight lines between the displaced nodes, every member's deformed axis is
     /// drawn as a curve: the end displacements and rotations interpolated along the member (cubic
     /// for the bending deflection, linear for the axial displacement and the twist, the exact
-    /// shape of a beam element without loads along it), times the factor. The curves are an
+    /// shape of a beam element without loads along it; a truss element (Hinges) stays straight and does
+    /// not twist), times the factor. The curves are an
     /// output, and they travel with the deformed model so that Member Info draws the sections
     /// along them.
     /// </summary>
@@ -201,7 +202,7 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
 
                 // deformed axis, from the undeformed member and its local z (before they are replaced below)
                 Point3d[] axis; Vector3d[] zdir;
-                if (DeformedAxis(sn.Pt, en.Pt, e.Pln.YAxis, ds, de, factor, 10, out axis, out zdir))
+                if (DeformedAxis(sn.Pt, en.Pt, e.Pln.YAxis, ds, de, factor, 10, e.Hinges, out axis, out zdir))
                 {
                     axes[ie] = axis;
                     zs[ie] = zdir;
@@ -248,10 +249,12 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
         /// Points along the deformed axis of a member from p1 to p2 (nSeg + 1 points) and the local z-direction
         /// at each. d1, d2: displacements of the end nodes (ux, uy, uz [m], rx, ry, rz [rad], global), times
         /// factor. Transverse displacement: cubic (Hermite) from the end translations and the slopes
-        /// theta x e_x; axial displacement and twist: linear. False if the member has no length.
+        /// theta x e_x; axial displacement and twist: linear. A truss element (straight = true) is hinged at
+        /// both ends, so it does not follow the rotations of its nodes: it stays straight between the
+        /// displaced nodes and does not twist. False if the member has no length.
         /// </summary>
         public static bool DeformedAxis(Point3d p1, Point3d p2, Vector3d localZ, double[] d1, double[] d2, double factor, int nSeg,
-                                        out Point3d[] axis, out Vector3d[] zdir)
+                                        bool straight, out Point3d[] axis, out Vector3d[] zdir)
         {
             axis = null; zdir = null;
             Vector3d along = p2 - p1;
@@ -270,6 +273,12 @@ namespace Propability_NTNU_v1.Components.ToolboxComponents
             Vector3d t1 = u1 - a1 * ex, t2 = u2 - a2 * ex;            // transverse
             Vector3d s1 = Vector3d.CrossProduct(r1, ex), s2 = Vector3d.CrossProduct(r2, ex);   // slopes
             double phi1 = r1 * ex, phi2 = r2 * ex;                    // twist
+            if (straight)
+            {
+                // truss: the slope of the chord at both ends (the cubic becomes a straight line), no twist
+                s1 = s2 = (t2 - t1) / len;
+                phi1 = phi2 = 0.0;
+            }
 
             nSeg = Math.Max(1, nSeg);
             axis = new Point3d[nSeg + 1];
