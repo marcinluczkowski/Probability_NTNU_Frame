@@ -23,6 +23,17 @@
 //  RANDOM fy and E, so the resistance model is the Eurocode one and its bias and
 //  scatter are carried by the model uncertainty thetaR.
 //
+//  RESISTANCE MODEL UNCERTAINTY, PER RESISTANCE
+//  thetaR multiplies each characteristic resistance at the place of its partial factor
+//  (ResistanceFactors in ST_LS_MemberInteraction.cs). Each resistance can have its own
+//  variable:
+//    TR:yield      A fy          cross-section check (gammaM0); axial-only: tension
+//    TR:bending    W fy          cross-section check (gammaM0), and Wz fy in (6.61)/(6.62)
+//    TR:buckling   chi A fy      (6.61)/(6.62) (gammaM1); axial-only: flexural buckling
+//    TR:ltb        chi_LT Wy fy  (6.61)/(6.62) (gammaM1), also the check with N = 0
+//    TR            every resistance that has no TR:<resistance> of its own
+//  A resistance with neither is taken with thetaR = 1 (no model uncertainty).
+//
 //  ONE RANDOM VECTOR FOR ALL LIMIT STATES
 //  Every limit state is a function of the same vector x. This is what makes the
 //  correlation between member failures available later (rho_ij = alpha_i . alpha_j).
@@ -77,6 +88,23 @@ namespace Propability_NTNU_v1.Classes.Reliability
         LoadEffectModel
     }
 
+    /// <summary>
+    /// The characteristic resistance a resistance model uncertainty (TR) multiplies.
+    /// All = every resistance that has no TR of its own.
+    /// </summary>
+    public enum ResistanceTerm
+    {
+        All = -1,
+        /// <summary>A fy in the cross-section check (gammaM0). Axial only: tension.</summary>
+        Yield = 0,
+        /// <summary>W fy in the cross-section check (gammaM0), and Wz fy in (6.61)/(6.62).</summary>
+        Bending = 1,
+        /// <summary>chi A fy in (6.61)/(6.62) (gammaM1). Axial only: flexural buckling.</summary>
+        Buckling = 2,
+        /// <summary>chi_LT Wy fy in (6.61)/(6.62) (gammaM1), also in the check with N = 0.</summary>
+        LateralTorsional = 3
+    }
+
     /// <summary>What one random variable does in the member limit states.</summary>
     public class MemberVariable
     {
@@ -86,6 +114,54 @@ namespace Propability_NTNU_v1.Classes.Reliability
         public double Reference = 1.0;
         /// <summary>Element tag of the group. Empty = all members.</summary>
         public string ElementTag = "";
+        /// <summary>Resistance model uncertainty only: the resistance it multiplies.</summary>
+        public ResistanceTerm Term = ResistanceTerm.All;
+
+        /// <summary>The resistances that can have their own TR, in the order of ResistanceTerm.</summary>
+        public static readonly ResistanceTerm[] Terms =
+            { ResistanceTerm.Yield, ResistanceTerm.Bending, ResistanceTerm.Buckling, ResistanceTerm.LateralTorsional };
+
+        /// <summary>The binding keyword of a resistance: yield, bending, buckling, ltb.</summary>
+        public static string TermKey(ResistanceTerm t)
+        {
+            switch (t)
+            {
+                case ResistanceTerm.Yield: return "yield";
+                case ResistanceTerm.Bending: return "bending";
+                case ResistanceTerm.Buckling: return "buckling";
+                case ResistanceTerm.LateralTorsional: return "ltb";
+                default: return "";
+            }
+        }
+
+        /// <summary>What a resistance is, for the reports.</summary>
+        public static string TermDescription(ResistanceTerm t)
+        {
+            switch (t)
+            {
+                case ResistanceTerm.Yield: return "yielding: A fy in the cross-section check";
+                case ResistanceTerm.Bending: return "bending: W fy in the cross-section check, Wz fy in the member checks";
+                case ResistanceTerm.Buckling: return "flexural buckling: chi A fy in the member checks";
+                case ResistanceTerm.LateralTorsional: return "lateral-torsional buckling: chi_LT Wy fy in the member checks";
+                default: return "every resistance without its own TR";
+            }
+        }
+
+        private static ResistanceTerm ParseTerm(string arg, string spec)
+        {
+            switch (arg.Trim().ToLowerInvariant())
+            {
+                case "": return ResistanceTerm.All;
+                case "yield": case "yielding": return ResistanceTerm.Yield;
+                case "bending": return ResistanceTerm.Bending;
+                case "buckling": case "flexural": return ResistanceTerm.Buckling;
+                case "ltb": case "lateral-torsional": return ResistanceTerm.LateralTorsional;
+                default:
+                    throw new ArgumentException(
+                        $"'{spec}': unknown resistance '{arg.Trim()}'. Use TR (every resistance) or " +
+                        "TR:yield, TR:bending, TR:buckling, TR:ltb.");
+            }
+        }
 
         /// <summary>
         /// Parses a compact binding string.
@@ -96,7 +172,9 @@ namespace Propability_NTNU_v1.Classes.Reliability
         ///   "FY"          yield strength of all members
         ///   "FY:chord"    yield strength of the members with element tag "chord"
         ///   "E", "E:tag"  Young's modulus of all members / of one group
-        ///   "TR"          resistance model uncertainty
+        ///   "TR"          resistance model uncertainty of every resistance without its own TR
+        ///   "TR:yield"    ... of A fy in the cross-section check (also TR:bending, TR:buckling,
+        ///                 TR:ltb; see ResistanceTerm)
         ///   "TE"          load-effect model uncertainty
         /// </summary>
         public static MemberVariable Parse(string spec, string name)
@@ -142,7 +220,10 @@ namespace Propability_NTNU_v1.Classes.Reliability
                     return v;
 
                 case "TR":
+                    if (t.Length > 2)
+                        throw new ArgumentException($"'{spec}': expected TR or TR:<resistance>.");
                     v.Kind = MemberVarKind.ResistanceModel;
+                    v.Term = ParseTerm(arg, spec);
                     return v;
 
                 case "TE":
@@ -167,7 +248,9 @@ namespace Propability_NTNU_v1.Classes.Reliability
                 case MemberVarKind.Modulus:
                     return "E of " + (string.IsNullOrEmpty(ElementTag) ? "all members" : "'" + ElementTag + "'");
                 case MemberVarKind.ResistanceModel:
-                    return "resistance model uncertainty";
+                    return (Term == ResistanceTerm.All)
+                        ? "resistance model uncertainty (TR)"
+                        : "resistance model uncertainty (TR:" + TermKey(Term) + ")";
                 default:
                     return "load-effect model uncertainty";
             }
@@ -280,8 +363,18 @@ namespace Propability_NTNU_v1.Classes.Reliability
         private readonly bool[] _feIsLoad;    // FE parameter is a load case (else a modulus)
         private readonly int[] _iFy;          // member -> variable holding its fy, -1 = model value
         private readonly int[] _iE;           // member -> variable holding its E,  -1 = model value
-        private readonly int _iTR = -1;       // variable holding thetaR, -1 = 1.0
+        private readonly int[] _iTR;          // resistance (ResistanceTerm) -> variable holding its thetaR, -1 = 1.0
+        private readonly int[] _trVars;       // the distinct variables in _iTR
         private readonly int _iTE = -1;       // variable holding thetaE, -1 = 1.0
+
+        /// <summary>Notes on the resistance model uncertainties (e.g. a TR that no resistance uses).</summary>
+        public List<string> BindingNotes { get; private set; }
+
+        /// <summary>Index of the variable that multiplies resistance t, -1 if none (thetaR = 1).</summary>
+        public int ResistanceVariable(ResistanceTerm t)
+        {
+            return (t == ResistanceTerm.All) ? -1 : _iTR[(int)t];
+        }
 
         // --- constructors ---
         /// <param name="bucklingLengths">Optional: element tag -> { Lcr,y ; Lcr,z [; L,LT] } in [m].</param>
@@ -332,6 +425,10 @@ namespace Propability_NTNU_v1.Classes.Reliability
             var feVar = new List<int>();
             var feIsLoad = new List<bool>();
 
+            _iTR = Enumerable.Repeat(-1, MemberVariable.Terms.Length).ToArray();
+            int iTrAll = -1;                      // the plain TR, for the resistances without their own
+            BindingNotes = new List<string>();
+
             for (int i = 0; i < Variables.Count; i++)
             {
                 MemberVariable v = Variables[i];
@@ -355,9 +452,22 @@ namespace Propability_NTNU_v1.Classes.Reliability
                         break;
 
                     case MemberVarKind.ResistanceModel:
-                        if (_iTR >= 0)
-                            throw new ArgumentException("Only one resistance model uncertainty (TR) can be bound.");
-                        _iTR = i;
+                        if (v.Term == ResistanceTerm.All)
+                        {
+                            if (iTrAll >= 0)
+                                throw new ArgumentException(
+                                    $"TR is bound twice ('{Variables[iTrAll].Name}' and '{v.Name}'). Bind it once, " +
+                                    "or use TR:yield, TR:bending, TR:buckling, TR:ltb for separate resistances.");
+                            iTrAll = i;
+                        }
+                        else
+                        {
+                            int k = (int)v.Term;
+                            if (_iTR[k] >= 0)
+                                throw new ArgumentException(
+                                    $"TR:{MemberVariable.TermKey(v.Term)} is bound twice ('{Variables[_iTR[k]].Name}' and '{v.Name}').");
+                            _iTR[k] = i;
+                        }
                         break;
 
                     case MemberVarKind.LoadEffectModel:
@@ -367,6 +477,14 @@ namespace Propability_NTNU_v1.Classes.Reliability
                         break;
                 }
             }
+
+            // the plain TR covers every resistance that has no TR of its own
+            bool allUsed = false;
+            for (int k = 0; k < _iTR.Length; k++)
+                if (_iTR[k] < 0 && iTrAll >= 0) { _iTR[k] = iTrAll; allUsed = true; }
+            if (iTrAll >= 0 && !allUsed)
+                BindingNotes.Add($"TR ('{Variables[iTrAll].Name}') is not used: every resistance has its own TR:<resistance>.");
+            _trVars = _iTR.Where(i => i >= 0).Distinct().ToArray();
 
             _feVar = feVar.ToArray();
             _feIsLoad = feIsLoad.ToArray();
@@ -463,16 +581,20 @@ namespace Propability_NTNU_v1.Classes.Reliability
             MemberData md = Members[m];
             double fy = (_iFy[m] >= 0) ? x[_iFy[m]] : md.Fy0;
             double E = (_iE[m] >= 0) ? x[_iE[m]] : md.E0;
-            double tR = (_iTR >= 0) ? x[_iTR] : 1.0;
             double tE = (_iTE >= 0) ? x[_iTE] : 1.0;
 
             // a trial point of the line search may leave the physical domain: signal it with NaN
-            if (!(fy > 0.0) || !(E > 0.0) || !(tR > 0.0) || !(tE > 0.0)) return double.NaN;
+            if (!(fy > 0.0) || !(E > 0.0) || !(tE > 0.0)) return double.NaN;
+            foreach (int i in _trVars)
+                if (!(x[i] > 0.0)) return double.NaN;
             if (!Prepare(x)) return double.NaN;
 
             if (Options.Bending)
-                return EvaluateInteraction(m, mode, fy, E, tR, tE, grad, out resistance);
+                return EvaluateInteraction(x, m, mode, fy, E, tE, grad, out resistance);
 
+            // axial only: tension takes thetaR of yielding, buckling that of flexural buckling
+            int iTR = _iTR[(int)(mode == MemberMode.Tension ? ResistanceTerm.Yield : ResistanceTerm.Buckling)];
+            double tR = (iTR >= 0) ? x[iTR] : 1.0;
             double N = Fe.N[m];
 
             // g = tR * R - sign * tE * N, with R the resistance without model uncertainty
@@ -516,7 +638,7 @@ namespace Propability_NTNU_v1.Classes.Reliability
                 // resistance
                 if (_iFy[m] >= 0) grad[_iFy[m]] += tR * dR_dfy;
                 if (_iE[m] >= 0) grad[_iE[m]] += tR * dR_dE;
-                if (_iTR >= 0) grad[_iTR] += R;
+                if (iTR >= 0) grad[iTR] += R;
                 if (_iTE >= 0) grad[_iTE] += -sign * N;
             }
             return g;
@@ -529,9 +651,10 @@ namespace Propability_NTNU_v1.Classes.Reliability
         ///
         /// Gradient: dU/dp = sum_j dU/dF_j * thetaE * dF_j/dp, with dF_j/dp (N and the end moments)
         /// from the DDM solve and dU/dF_j, dU/dfy, dU/dE, dU/dthetaR by central differences on the
-        /// closed-form EN 1993-1-1 expressions (no FE solve involved).
+        /// closed-form EN 1993-1-1 expressions (no FE solve involved). A thetaR variable bound to
+        /// several resistances (the plain TR) is changed in all of them at once.
         /// </summary>
-        private double EvaluateInteraction(int m, MemberMode mode, double fy, double E, double tR, double tE,
+        private double EvaluateInteraction(double[] x, int m, MemberMode mode, double fy, double E, double tE,
                                            double[] grad, out double resistance)
         {
             MemberData md = Members[m];
@@ -540,8 +663,9 @@ namespace Propability_NTNU_v1.Classes.Reliability
             EndForces f = EndForces.FromLocal(Fe.LocalEndForces(m));
             EndForces fe = f.Scaled(tE);
             MemberCheckOptions o = Options;
-            Func<EndForces, double, double, double, double> U = (ff, fyv, ev, trv) =>
-                MemberInteraction.Utilisation(md, ff, fyv, ev, md.G0 * ev / md.E0, trv, trv, o, mode);
+            ResistanceFactors tR = ResistanceAt(x, -1, 0.0);
+            Func<EndForces, double, double, ResistanceFactors, double> U = (ff, fyv, ev, trv) =>
+                MemberInteraction.Utilisation(md, ff, fyv, ev, md.G0 * ev / md.E0, trv, o, mode);
 
             double u = U(fe, fy, E, tR);
             if (double.IsNaN(u) || double.IsInfinity(u)) return double.NaN;
@@ -575,7 +699,8 @@ namespace Propability_NTNU_v1.Classes.Reliability
             // resistance and model uncertainties
             if (_iFy[m] >= 0) grad[_iFy[m]] += -Central(v => U(fe, v, E, tR), fy);
             if (_iE[m] >= 0) grad[_iE[m]] += -Central(v => U(fe, fy, v, tR), E);
-            if (_iTR >= 0) grad[_iTR] += -Central(v => U(fe, fy, E, v), tR);
+            foreach (int i in _trVars)
+                grad[i] += -Central(v => U(fe, fy, E, ResistanceAt(x, i, v)), x[i]);
             if (_iTE >= 0)
             {
                 double dU = 0.0;
@@ -583,6 +708,23 @@ namespace Propability_NTNU_v1.Classes.Reliability
                 grad[_iTE] += -dU;
             }
             return g;
+        }
+
+        /// <summary>
+        /// thetaR of every resistance at x (1 where none is bound), with variable i set to value
+        /// instead of x[i] (i = -1: x as it is). Bending also covers Wz fy in the member checks,
+        /// where there is no lateral-torsional buckling.
+        /// </summary>
+        private ResistanceFactors ResistanceAt(double[] x, int i, double value)
+        {
+            Func<ResistanceTerm, double> t = term =>
+            {
+                int iv = _iTR[(int)term];
+                return (iv < 0) ? 1.0 : (iv == i ? value : x[iv]);
+            };
+            double bend = t(ResistanceTerm.Bending);
+            return new ResistanceFactors(t(ResistanceTerm.Yield), bend, t(ResistanceTerm.Buckling),
+                                         t(ResistanceTerm.LateralTorsional), bend);
         }
 
         /// <summary>Central difference of a scalar function at v > 0, relative step 1e-6.</summary>
@@ -727,6 +869,8 @@ namespace Propability_NTNU_v1.Classes.Reliability
         public List<MemberData> Members = new List<MemberData>();
         public List<string> VariableNames = new List<string>();
         public List<string> VariableRoles = new List<string>();
+        /// <summary>Which variable multiplies each resistance (one line per resistance), for the report.</summary>
+        public List<string> ResistanceModel = new List<string>();
         /// <summary>How the members were checked (axial only, or axial force + bending).</summary>
         public MemberCheckOptions Options = MemberCheckOptions.Default();
         /// <summary>Every limit state that was assessed, in member order.</summary>
@@ -782,6 +926,12 @@ namespace Propability_NTNU_v1.Classes.Reliability
                 sb.AppendLine("  [" + i.ToString(ci) + "] " + VariableNames[i] + " : " +
                               (i < VariableRoles.Count ? VariableRoles[i] : ""));
             sb.AppendLine();
+            if (ResistanceModel.Count > 0)
+            {
+                sb.AppendLine("Resistance model uncertainty (thetaR) per resistance:");
+                foreach (string line in ResistanceModel) sb.AppendLine("  " + line);
+                sb.AppendLine();
+            }
 
             sb.AppendLine("Limit states (N at the mean point, tension positive):");
             sb.AppendLine("  member            mode         N [kN]     util    beta        Pf   status");
@@ -909,6 +1059,20 @@ namespace Propability_NTNU_v1.Classes.Reliability
                 res.VariableRoles.Add(bindings[i].ToString() + "  |  " + vars[i].Distribution.ToString() +
                                       ", mean " + vars[i].Mean.ToString("G6", CultureInfo.InvariantCulture) +
                                       ", st.dev. " + vars[i].StdDev.ToString("G6", CultureInfo.InvariantCulture));
+            foreach (ResistanceTerm t in MemberVariable.Terms)
+            {
+                int iv = ls.ResistanceVariable(t);
+                bool used = ls.Options.Bending || t == ResistanceTerm.Yield || t == ResistanceTerm.Buckling;
+                string what = !used
+                    ? "not used (axial force only)"
+                    : (iv >= 0 ? "[" + iv.ToString(CultureInfo.InvariantCulture) + "] " + vars[iv].Name +
+                                 ", mean " + vars[iv].Mean.ToString("G4", CultureInfo.InvariantCulture) +
+                                 ", CoV " + (vars[iv].StdDev / vars[iv].Mean).ToString("0.0##", CultureInfo.InvariantCulture)
+                               : "1 (no variable bound)");
+                res.ResistanceModel.Add((MemberVariable.TermKey(t) + ":").PadRight(10) + what +
+                                        "   (" + MemberVariable.TermDescription(t) + ")");
+            }
+            res.Warnings.AddRange(ls.BindingNotes);
             res.Governing = new MemberLimitStateResult[nMem];
             res.StiffnessIsConstant = ls.Fe.StiffnessIsConstant;
 

@@ -21,6 +21,16 @@
 //    A member in tension gets the cross-section check and (6.61)/(6.62) with N = 0
 //    (lateral-torsional buckling under the moments alone); the larger one counts.
 //
+//  FACTORS ON THE RESISTANCES (ResistanceFactors)
+//  Each characteristic resistance has its own factor, at the place of its partial factor:
+//    N0   A fy              cross-section check          1/gammaM0 | thetaR yielding
+//    M0   W fy              cross-section check          1/gammaM0 | thetaR bending
+//    N1   chi A fy          (6.61)/(6.62)                1/gammaM1 | thetaR flexural buckling
+//    My1  chi_LT Wy fy      (6.61)/(6.62)                1/gammaM1 | thetaR lateral-torsional buckling
+//    Mz1  Wz fy             (6.61)/(6.62)                1/gammaM1 | thetaR bending (no LTB about z)
+//  The Eurocode check uses ResistanceFactors.Design(gammaM0, gammaM1); the limit states
+//  fill in the model uncertainties bound to each resistance (TR:<resistance>).
+//
 //  SETTINGS (MemberCheckOptions), defaults chosen to match Karamba3D's defaults:
 //    Elastic = true     elastic section moduli and the class 3 columns of Annex B
 //                       (Karamba: "Elast" = true). false: plastic moduli, class 1/2.
@@ -73,6 +83,42 @@ namespace Propability_NTNU_v1.Classes.Reliability
     }
 
     /// <summary>
+    /// Factors on the characteristic resistances, one per resistance, at the place of its partial
+    /// factor: 1/gammaM in the Eurocode check, the model uncertainty thetaR in the limit states.
+    /// </summary>
+    public struct ResistanceFactors
+    {
+        /// <summary>A fy in the cross-section check (gammaM0; thetaR yielding).</summary>
+        public double N0;
+        /// <summary>Wy fy and Wz fy in the cross-section check (gammaM0; thetaR bending).</summary>
+        public double M0;
+        /// <summary>chi A fy in (6.61)/(6.62) (gammaM1; thetaR flexural buckling).</summary>
+        public double N1;
+        /// <summary>chi_LT Wy fy in (6.61)/(6.62) (gammaM1; thetaR lateral-torsional buckling).</summary>
+        public double My1;
+        /// <summary>Wz fy in (6.61)/(6.62) (gammaM1; thetaR bending: no lateral-torsional buckling about z).</summary>
+        public double Mz1;
+
+        public ResistanceFactors(double n0, double m0, double n1, double my1, double mz1)
+        {
+            N0 = n0; M0 = m0; N1 = n1; My1 = my1; Mz1 = mz1;
+        }
+
+        /// <summary>The Eurocode check: 1/gammaM0 on the cross-section, 1/gammaM1 on the member resistances.</summary>
+        public static ResistanceFactors Design(double gammaM0, double gammaM1)
+        {
+            double r0 = 1.0 / gammaM0, r1 = 1.0 / gammaM1;
+            return new ResistanceFactors(r0, r0, r1, r1, r1);
+        }
+
+        /// <summary>The same factor on every resistance (r0 on the cross-section, r1 on the member checks).</summary>
+        public static ResistanceFactors Uniform(double r0, double r1)
+        {
+            return new ResistanceFactors(r0, r0, r1, r1, r1);
+        }
+    }
+
+    /// <summary>
     /// The end forces of a member that the check needs, in the layout of the FE end-force vector:
     /// N at the end node (tension positive) [N], end moments about local y and z [N.m].
     /// </summary>
@@ -121,15 +167,25 @@ namespace Propability_NTNU_v1.Classes.Reliability
     public static class MemberInteraction
     {
         /// <summary>
-        /// Utilisation of member md for the given end forces.
-        /// mode: Tension (cross-section with the tensile force, and the member checks with N = 0),
-        /// Compression (cross-section with the compressive force), BucklingY (6.61), BucklingZ (6.62).
-        /// r0 and r1 multiply the characteristic resistances: 1/gammaM0 and 1/gammaM1 in the
-        /// Eurocode check, thetaR in the limit states. fy, E and G are the values to use (random or
-        /// nominal) [N/mm2].
+        /// Utilisation of member md for the given end forces, with r0 on every cross-section resistance
+        /// and r1 on every member resistance: 1/gammaM0 and 1/gammaM1 in the Eurocode check.
         /// </summary>
         public static double Utilisation(MemberData md, EndForces f, double fy, double E, double G,
                                          double r0, double r1, MemberCheckOptions o, MemberMode mode,
+                                         InteractionDetail d = null)
+        {
+            return Utilisation(md, f, fy, E, G, ResistanceFactors.Uniform(r0, r1), o, mode, d);
+        }
+
+        /// <summary>
+        /// Utilisation of member md for the given end forces.
+        /// mode: Tension (cross-section with the tensile force, and the member checks with N = 0),
+        /// Compression (cross-section with the compressive force), BucklingY (6.61), BucklingZ (6.62).
+        /// r multiplies the characteristic resistances, one factor per resistance (ResistanceFactors).
+        /// fy, E and G are the values to use (random or nominal) [N/mm2].
+        /// </summary>
+        public static double Utilisation(MemberData md, EndForces f, double fy, double E, double G,
+                                         ResistanceFactors r, MemberCheckOptions o, MemberMode mode,
                                          InteractionDetail d = null)
         {
             double wy = o.Elastic ? md.Wy : md.Wpy;
@@ -144,17 +200,17 @@ namespace Propability_NTNU_v1.Classes.Reliability
             if (mode == MemberMode.Tension || mode == MemberMode.Compression)
             {
                 double n = (mode == MemberMode.Tension) ? Math.Max(f.N, 0.0) : Math.Max(-f.N, 0.0);
-                double cs = n / (nRk * r0) + Ratio(myEd, myRk * r0) + Ratio(mzEd, mzRk * r0);
+                double cs = n / (nRk * r.N0) + Ratio(myEd, myRk * r.M0) + Ratio(mzEd, mzRk * r.M0);
                 if (d != null) { d.NEd = n; d.U = cs; d.Governing = "6.2.1(7)"; }
                 if (mode == MemberMode.Compression) return cs;
 
                 // tension: lateral-torsional buckling under the moments alone (6.61/6.62 with N = 0)
-                double uy = MemberCheck(md, f, 0.0, fy, E, G, r1, o, true, null);
-                double uz = MemberCheck(md, f, 0.0, fy, E, G, r1, o, false, null);
+                double uy = MemberCheck(md, f, 0.0, fy, E, G, r, o, true, null);
+                double uz = MemberCheck(md, f, 0.0, fy, E, G, r, o, false, null);
                 double u = Math.Max(cs, Math.Max(uy, uz));
                 if (d != null && u > cs)
                 {
-                    MemberCheck(md, f, 0.0, fy, E, G, r1, o, uy >= uz, d);
+                    MemberCheck(md, f, 0.0, fy, E, G, r, o, uy >= uz, d);
                     d.NEd = n;
                     d.U = u;
                 }
@@ -162,12 +218,12 @@ namespace Propability_NTNU_v1.Classes.Reliability
             }
 
             double nc = Math.Max(-f.N, 0.0);
-            return MemberCheck(md, f, nc, fy, E, G, r1, o, mode == MemberMode.BucklingY, d);
+            return MemberCheck(md, f, nc, fy, E, G, r, o, mode == MemberMode.BucklingY, d);
         }
 
         /// <summary>(6.61) if aboutY, else (6.62), for the compressive force nc [N] (>= 0).</summary>
         private static double MemberCheck(MemberData md, EndForces f, double nc, double fy, double E, double G,
-                                          double r1, MemberCheckOptions o, bool aboutY, InteractionDetail d)
+                                          ResistanceFactors r, MemberCheckOptions o, bool aboutY, InteractionDetail d)
         {
             double wy = o.Elastic ? md.Wy : md.Wpy;
             double wz = o.Elastic ? md.Wz : md.Wpz;
@@ -180,8 +236,8 @@ namespace Propability_NTNU_v1.Classes.Reliability
             double lz = MemberResistance.LambdaBar(md.LcrZ, md.iz, fy, E);
             double chiY = MemberResistance.Chi(ly, md.AlphaY, out dChi);
             double chiZ = MemberResistance.Chi(lz, md.AlphaZ, out dChi);
-            double nY = nc / (chiY * nRk * r1);
-            double nZ = nc / (chiZ * nRk * r1);
+            double nY = nc / (chiY * nRk * r.N1);
+            double nZ = nc / (chiZ * nRk * r.N1);
 
             // equivalent uniform moment factors from the end moments (linear moment diagram)
             double psiY = Psi(-f.My1, f.My2), psiZ = Psi(-f.Mz1, f.Mz2);
@@ -223,8 +279,8 @@ namespace Propability_NTNU_v1.Classes.Reliability
                 else kzy = Math.Min(0.6 + lz, 1.0 - 0.1 * lz * nZ / (cmLT - 0.25));
             }
 
-            double mY = Ratio(myEd, chiLT * myRk * r1);
-            double mZ = Ratio(mzEd, mzRk * r1);
+            double mY = Ratio(myEd, chiLT * myRk * r.My1);
+            double mZ = Ratio(mzEd, mzRk * r.Mz1);
             double u = aboutY ? nY + kyy * mY + kyz * mZ
                               : nZ + kzy * mY + kzz * mZ;
 
